@@ -5,6 +5,9 @@ import type { EngineDetectionResult, EngineEvidence } from "../engines/EngineDet
 import type { GameEngineAdapter } from "../engines/GameEngineAdapter.js";
 import { ConsoleLogger } from "./ConsoleLogger.js";
 import { EngineRegistry } from "../engines/EngineRegistry.js";
+import { TranslationCsvReader } from "../core/TranslationCsvReader.js";
+import type { TranslationCsvValidationResult } from "../core/TranslationCsvValidator.js";
+import { TranslationCsvValidator } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvWriter } from "../core/TranslationCsvWriter.js";
 
 interface DetectedEngine {
@@ -45,6 +48,10 @@ class CliApplication {
             return await this.runExtract(args);
         }
 
+        if (commandName === "validate") {
+            return await this.runValidate(args);
+        }
+
         this.logger.error(`Unknown command: ${commandName}`);
         this.printHelp();
         return 1;
@@ -67,6 +74,30 @@ class CliApplication {
 
         this.printDetectionResult(detectedEngine.result);
         return 0;
+    }
+
+    private async runValidate(args: readonly string[]): Promise<number> {
+        const csvPath: string | undefined = args[1];
+
+        if (csvPath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator validate <translation-csv>");
+            return 1;
+        }
+
+        const reader: TranslationCsvReader = new TranslationCsvReader();
+        const readResult = await reader.read(csvPath);
+
+        if (!readResult.isSuccess) {
+            this.logger.error(readResult.errorMessage);
+            return 1;
+        }
+
+        const validator: TranslationCsvValidator = new TranslationCsvValidator();
+        const validationResult: TranslationCsvValidationResult = validator.validate(readResult.value.entries);
+
+        this.printCsvValidationResult(readResult.value.filePath, validationResult);
+
+        return validationResult.hasErrors ? 1 : 0;
     }
 
     private async runExtract(args: readonly string[]): Promise<number> {
@@ -151,16 +182,29 @@ class CliApplication {
         this.logger.info(`- ${item.message}: ${item.path}`);
     }
 
+    private printCsvValidationResult(filePath: string, result: TranslationCsvValidationResult): void {
+        this.logger.info(`CSV: ${filePath}`);
+        this.logger.info(`Rows: ${result.totalRows}`);
+        this.logger.info(`Translated rows: ${result.translatedRows}`);
+        this.logger.info(`Empty translations: ${result.emptyTranslationRows}`);
+        this.logger.info(`Same as source: ${result.sameAsSourceRows}`);
+        this.logger.info(`Empty source rows: ${result.emptySourceRows}`);
+        this.logger.info(`Duplicate source rows: ${result.duplicateSourceRows}`);
+        this.logger.info(`Status: ${result.hasErrors ? "Has errors" : "OK"}`);
+    }
+
     private printHelp(): void {
         this.logger.info("OpenGameTranslator");
         this.logger.info("");
         this.logger.info("Usage:");
         this.logger.info("  opengametranslator detect <game-path>");
         this.logger.info("  opengametranslator extract <game-path> <output-csv>");
+        this.logger.info("  opengametranslator validate <translation-csv>");
         this.logger.info("");
         this.logger.info("Commands:");
         this.logger.info("  detect    Detect the game engine from a local game directory.");
         this.logger.info("  extract   Extract translatable text to a two-column CSV.");
+        this.logger.info("  validate  Validate a two-column translation CSV.");
     }
 }
 
