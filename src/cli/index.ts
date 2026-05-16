@@ -12,6 +12,7 @@ import { TranslationCsvValidator } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvWriter } from "../core/TranslationCsvWriter.js";
 import { TranslationPackageBuilder } from "../core/TranslationPackageBuilder.js";
 import { TranslationPackageWriter } from "../core/TranslationPackageWriter.js";
+import { TyranoScriptManagedInstaller } from "../engines/tyrano/TyranoScriptManagedInstaller.js";
 
 interface DetectedEngine {
     readonly adapter: GameEngineAdapter;
@@ -61,6 +62,18 @@ class CliApplication {
 
         if (commandName === "build") {
             return await this.runBuild(args);
+        }
+
+        if (commandName === "install") {
+            return await this.runInstall(args);
+        }
+
+        if (commandName === "uninstall") {
+            return await this.runUninstall(args);
+        }
+
+        if (commandName === "verify-install") {
+            return await this.runVerifyInstall(args);
         }
 
         this.logger.error(`Unknown command: ${commandName}`);
@@ -221,6 +234,89 @@ class CliApplication {
         return 0;
     }
 
+    private async runInstall(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+        const translationPackagePath: string | undefined = args[2];
+        const gameExecutableName: string | null = args[3] ?? null;
+
+        if (gamePath === undefined || translationPackagePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator install <game-path> <translation-package> [game-exe-name]");
+            return 1;
+        }
+
+        const installer: TyranoScriptManagedInstaller = new TyranoScriptManagedInstaller();
+        const installResult = await installer.install({
+            gamePath: gamePath,
+            translationPackagePath: translationPackagePath,
+            gameExecutableName: gameExecutableName
+        });
+
+        if (!installResult.isSuccess) {
+            this.logger.error(installResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Game root: ${installResult.value.gameRootPath}`);
+        this.logger.info(`App root: ${installResult.value.appRootPath}`);
+        this.logger.info(`Workdir: ${installResult.value.workdirPath}`);
+        this.logger.info(`Manifest: ${installResult.value.manifestPath}`);
+        this.logger.info(`Patched file: ${installResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${installResult.value.backupFilePath}`);
+        this.logger.info(`Game executable: ${installResult.value.gameExecutableName}`);
+        this.logger.info(`Run script: ${installResult.value.runBatPath}`);
+        this.logger.info(`Restore script: ${installResult.value.restoreBatPath}`);
+
+        return 0;
+    }
+
+    private async runUninstall(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator uninstall <game-path>");
+            return 1;
+        }
+
+        const installer: TyranoScriptManagedInstaller = new TyranoScriptManagedInstaller();
+        const uninstallResult = await installer.uninstall(gamePath);
+
+        if (!uninstallResult.isSuccess) {
+            this.logger.error(uninstallResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Restored file: ${uninstallResult.value.restoredFilePath}`);
+        this.logger.info(`Backup file: ${uninstallResult.value.backupFilePath}`);
+
+        return 0;
+    }
+
+    private async runVerifyInstall(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator verify-install <game-path>");
+            return 1;
+        }
+
+        const installer: TyranoScriptManagedInstaller = new TyranoScriptManagedInstaller();
+        const verifyResult = await installer.verify(gamePath);
+
+        if (!verifyResult.isSuccess) {
+            this.logger.error(verifyResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Manifest: ${verifyResult.value.manifestPath}`);
+        this.logger.info(`Patched file: ${verifyResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${verifyResult.value.backupFilePath}`);
+        this.logger.info(`Current SHA-256: ${verifyResult.value.currentSha256}`);
+        this.logger.info(`Expected SHA-256: ${verifyResult.value.expectedPatchedSha256}`);
+        this.logger.info(`Status: ${verifyResult.value.isInstalled ? "Installed" : "Changed"}`);
+
+        return verifyResult.value.isInstalled ? 0 : 1;
+    }
+
     private async runExtract(args: readonly string[]): Promise<number> {
         const targetPath: string | undefined = args[1];
         const outputPath: string | undefined = args[2];
@@ -323,6 +419,9 @@ class CliApplication {
         this.logger.info("  opengametranslator validate <translation-csv>");
         this.logger.info("  opengametranslator repair <original-csv> <translated-tool-csv> <output-csv>");
         this.logger.info("  opengametranslator build <translation-csv> <output-json>");
+        this.logger.info("  opengametranslator install <game-path> <translation-package> [game-exe-name]");
+        this.logger.info("  opengametranslator verify-install <game-path>");
+        this.logger.info("  opengametranslator uninstall <game-path>");
         this.logger.info("");
         this.logger.info("Commands:");
         this.logger.info("  detect    Detect the game engine from a local game directory.");
@@ -330,6 +429,9 @@ class CliApplication {
         this.logger.info("  validate  Validate a two-column translation CSV.");
         this.logger.info("  repair    Restore a two-column CSV when a tool overwrote the source column.");
         this.logger.info("  build     Build a runtime translation package from CSV.");
+        this.logger.info("  install   Create a managed TyranoScript patch, workdir, and launch scripts.");
+        this.logger.info("  verify-install  Verify the managed patch recorded in the manifest.");
+        this.logger.info("  uninstall Restore the original file from the managed backup.");
     }
 }
 

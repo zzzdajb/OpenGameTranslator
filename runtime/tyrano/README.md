@@ -17,7 +17,7 @@ The runtime currently hooks:
 - `button.hint`
 - `chara_new.jname`
 
-## Expected Package Path
+## Package Path
 
 By default, the runtime looks for:
 
@@ -25,12 +25,12 @@ By default, the runtime looks for:
 ./data/others/opengametranslator.package.json
 ```
 
-The path is relative to the game's `index.html`. It can be overridden before loading the runtime script:
+The path is relative to the game's `index.html`. The managed installer overrides it to the package stored in the game-level `OpenGameTranslator/` workdir:
 
 ```html
 <script>
 window.OpenGameTranslatorConfig = {
-    packagePath: "./data/others/opengametranslator.package.json"
+    packagePath: "../../OpenGameTranslator/opengametranslator.package.json"
 };
 </script>
 ```
@@ -49,4 +49,4 @@ Windows in-game smoke testing has passed for the current target game. Broader te
 - Confirming font rendering.
 - Confirming menus, save/load, replay, and late-game routes.
 
-See `设计和文档/Windows手动安装说明.md` for the current manual installation steps.
+See `设计和文档/Windows托管安装说明.md` for the current managed installation steps.
