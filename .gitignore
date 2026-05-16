@@ -25,7 +25,8 @@ pnpm-debug.log*
 Thumbs.db
 
 # Local game samples and extracted content
-games/
+games/*
+!games/README.md
 samples/
 游戏逆向报告/
 *.asar
