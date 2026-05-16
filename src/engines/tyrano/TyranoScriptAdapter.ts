@@ -3,9 +3,11 @@ import path from "node:path";
 import { constants } from "node:fs";
 
 import type { EngineDetectionResult, EngineEvidence } from "../EngineDetectionResult.js";
+import type { ExtractedTextEntry } from "../../core/ExtractedTextEntry.js";
 import type { GameEngineAdapter } from "../GameEngineAdapter.js";
 import type { Result } from "../../core/Result.js";
 import { Results } from "../../core/Result.js";
+import { TyranoScriptTextExtractor } from "./TyranoScriptTextExtractor.js";
 
 export class TyranoScriptAdapter implements GameEngineAdapter {
     public readonly engineId: string = "tyrano";
@@ -47,6 +49,23 @@ export class TyranoScriptAdapter implements GameEngineAdapter {
             confidence: Math.min(score, 100),
             evidence: evidence
         });
+    }
+
+    public async extractText(inputPath: string): Promise<Result<readonly ExtractedTextEntry[]>> {
+        const detectionResult: Result<EngineDetectionResult> = await this.detect(inputPath);
+
+        if (!detectionResult.isSuccess) {
+            return Results.failure(detectionResult.errorMessage);
+        }
+
+        if (detectionResult.value.scenarioDirectoryPath === null || detectionResult.value.confidence <= 0) {
+            return Results.failure("TyranoScript scenario directory was not detected.");
+        }
+
+        const extractor: TyranoScriptTextExtractor = new TyranoScriptTextExtractor(this.engineId);
+        const entries: readonly ExtractedTextEntry[] = await extractor.extractDirectory(detectionResult.value.scenarioDirectoryPath);
+
+        return Results.success(entries);
     }
 
     private createEmptyResult(inputPath: string): EngineDetectionResult {
