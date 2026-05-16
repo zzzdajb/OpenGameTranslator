@@ -1,0 +1,79 @@
+我们要开发一个开源游戏翻译工具，核心目标是：
+
+1. 不内置翻译 API。
+2. 不直接破坏性修改游戏源文件。
+3. 支持文本提取、JSONL 导出、译文校验、翻译包构建、运行时 Overlay。
+4. 特定引擎适配器必须和核心逻辑解耦。
+5. 代码必须新手友好，我需要能参与维护。
+
+请先不要实现复杂功能，不要一上来写大而全的框架。
+第一步请帮我设计一个最小可维护架构，并生成项目骨架。
+
+技术栈：
+- TypeScript + Node.js
+- strict TypeScript
+- CLI 工具
+- 不做 GUI
+- 不做自动翻译
+- 运行时插件可以是普通 JavaScript
+
+代码风格：
+- 偏 C# / .NET 风格的 TypeScript
+- 优先使用 class、interface、readonly、public/private
+- 显式返回类型
+- 少用复杂箭头函数、匿名函数链式调用
+- 避免 reduce
+- 复杂逻辑拆成具名方法
+- 可以多用 for...of
+- 禁止过度 OOP
+- 不要复杂 DI 容器
+- 不要抽象工厂套抽象工厂
+- 不要炫技
+- 不要滥用 any；处理未知 JSON 时优先用 unknown，然后做类型判断
+
+核心架构要求：
+
+一、Core 层
+负责所有引擎通用逻辑：
+- ExtractedTextEntry 数据模型
+- TranslationEntry 数据模型
+- JSONL 读写
+- 控制码/占位符校验
+- 翻译包构建
+- Result<T> 错误处理模型
+- 日志输出
+
+Core 层禁止依赖任何具体游戏引擎。
+
+二、Engine Adapter 层
+每个引擎一个 adapter，例如：
+- TyranoScriptAdapter
+- RpgMakerMvAdapter
+- RpgMakerMzAdapter
+
+每个 adapter 只负责：
+- 检测游戏是否属于该引擎
+- 提取该引擎的文本
+- 提供该引擎的运行时 Hook 文件模板
+- 提供该引擎需要保留的控制码规则
+
+三、CLI 层
+只负责命令行入口：
+- extract
+- validate
+- build
+- detect
+
+CLI 不写复杂业务逻辑，只调用 Core 和 Adapter。
+
+四、Runtime 层
+存放各引擎的运行时插件：
+- runtime/tyrano/
+- runtime/rpgmaker-mv/
+- runtime/rpgmaker-mz/
+
+运行时插件的原则：
+- 找到合法译文则显示译文
+- 找不到译文则显示原文
+- 译文校验失败则显示原文
+- 出现异常则显示原文

@@ -1,0 +1,22 @@
+{
+  "name": "open-game-translator",
+  "version": "0.1.0",
+  "description": "An open-source CLI toolkit for extracting, validating, and packaging game translation text.",
+  "type": "module",
+  "bin": {
+    "opengametranslator": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "npm run build && node dist/cli/index.js",
+    "start": "node dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}
