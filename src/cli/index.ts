@@ -6,6 +6,7 @@ import type { GameEngineAdapter } from "../engines/GameEngineAdapter.js";
 import { ConsoleLogger } from "./ConsoleLogger.js";
 import { EngineRegistry } from "../engines/EngineRegistry.js";
 import { TranslationCsvReader } from "../core/TranslationCsvReader.js";
+import { TranslationCsvRepairer } from "../core/TranslationCsvRepairer.js";
 import type { TranslationCsvValidationResult } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvValidator } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvWriter } from "../core/TranslationCsvWriter.js";
@@ -52,6 +53,10 @@ class CliApplication {
 
         if (commandName === "validate") {
             return await this.runValidate(args);
+        }
+
+        if (commandName === "repair") {
+            return await this.runRepair(args);
         }
 
         if (commandName === "build") {
@@ -104,6 +109,68 @@ class CliApplication {
         this.printCsvValidationResult(readResult.value.filePath, validationResult);
 
         return validationResult.hasErrors ? 1 : 0;
+    }
+
+    private async runRepair(args: readonly string[]): Promise<number> {
+        const originalCsvPath: string | undefined = args[1];
+        const translatedCsvPath: string | undefined = args[2];
+        const outputCsvPath: string | undefined = args[3];
+
+        if (originalCsvPath === undefined || translatedCsvPath === undefined || outputCsvPath === undefined) {
+            this.logger.error(
+                "Missing argument. Usage: opengametranslator repair <original-csv> <translated-tool-csv> <output-csv>"
+            );
+            return 1;
+        }
+
+        const reader: TranslationCsvReader = new TranslationCsvReader();
+        const originalReadResult = await reader.read(originalCsvPath);
+
+        if (!originalReadResult.isSuccess) {
+            this.logger.error(originalReadResult.errorMessage);
+            return 1;
+        }
+
+        const translatedReadResult = await reader.read(translatedCsvPath);
+
+        if (!translatedReadResult.isSuccess) {
+            this.logger.error(translatedReadResult.errorMessage);
+            return 1;
+        }
+
+        const repairer: TranslationCsvRepairer = new TranslationCsvRepairer();
+        const repairResult = repairer.repair(
+            originalReadResult.value.entries,
+            translatedReadResult.value.entries
+        );
+
+        if (!repairResult.isSuccess) {
+            this.logger.error(repairResult.errorMessage);
+            return 1;
+        }
+
+        const validator: TranslationCsvValidator = new TranslationCsvValidator();
+        const validationResult: TranslationCsvValidationResult = validator.validate(repairResult.value.entries);
+
+        if (validationResult.hasErrors) {
+            this.printCsvValidationResult(outputCsvPath, validationResult);
+            return 1;
+        }
+
+        const writer: TranslationCsvWriter = new TranslationCsvWriter();
+        const writeResult = await writer.writeTranslations(outputCsvPath, repairResult.value.entries);
+
+        if (!writeResult.isSuccess) {
+            this.logger.error(writeResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Rows: ${repairResult.value.rowCount}`);
+        this.logger.info(`Recovered translations: ${repairResult.value.translatedRows}`);
+        this.logger.info(`Empty translations: ${repairResult.value.emptyTranslationRows}`);
+        this.logger.info(`Output CSV: ${writeResult.value.outputPath}`);
+
+        return 0;
     }
 
     private async runBuild(args: readonly string[]): Promise<number> {
@@ -254,12 +321,14 @@ class CliApplication {
         this.logger.info("  opengametranslator detect <game-path>");
         this.logger.info("  opengametranslator extract <game-path> <output-csv>");
         this.logger.info("  opengametranslator validate <translation-csv>");
+        this.logger.info("  opengametranslator repair <original-csv> <translated-tool-csv> <output-csv>");
         this.logger.info("  opengametranslator build <translation-csv> <output-json>");
         this.logger.info("");
         this.logger.info("Commands:");
         this.logger.info("  detect    Detect the game engine from a local game directory.");
         this.logger.info("  extract   Extract translatable text to a two-column CSV.");
         this.logger.info("  validate  Validate a two-column translation CSV.");
+        this.logger.info("  repair    Restore a two-column CSV when a tool overwrote the source column.");
         this.logger.info("  build     Build a runtime translation package from CSV.");
     }
 }

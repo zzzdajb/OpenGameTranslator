@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ExtractedTextEntry } from "./ExtractedTextEntry.js";
 import type { Result } from "./Result.js";
 import { Results } from "./Result.js";
+import type { TranslationEntry } from "./TranslationEntry.js";
 
 export interface TranslationCsvWriteResult {
     readonly outputPath: string;
@@ -14,10 +15,6 @@ export interface TranslationCsvWriteResult {
 export class TranslationCsvWriter {
     public async write(filePath: string, entries: readonly ExtractedTextEntry[]): Promise<Result<TranslationCsvWriteResult>> {
         const outputPath: string = path.resolve(filePath);
-        const outputDirectoryPath: string = path.dirname(outputPath);
-
-        await mkdir(outputDirectoryPath, { recursive: true });
-
         const uniqueSources: string[] = this.collectUniqueSources(entries);
         const lines: string[] = [];
 
@@ -27,12 +24,34 @@ export class TranslationCsvWriter {
             lines.push(`${this.escapeCsvField(sourceText)},${this.escapeCsvField("")}`);
         }
 
-        await writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
+        await this.writeLines(outputPath, lines);
 
         return Results.success({
             outputPath: outputPath,
             totalEntryCount: entries.length,
             uniqueSourceCount: uniqueSources.length
+        });
+    }
+
+    public async writeTranslations(
+        filePath: string,
+        entries: readonly TranslationEntry[]
+    ): Promise<Result<TranslationCsvWriteResult>> {
+        const outputPath: string = path.resolve(filePath);
+        const lines: string[] = [];
+
+        lines.push(`${this.escapeCsvField("原文")},${this.escapeCsvField("译文")}`);
+
+        for (const entry of entries) {
+            lines.push(`${this.escapeCsvField(entry.sourceText)},${this.escapeCsvField(entry.translatedText)}`);
+        }
+
+        await this.writeLines(outputPath, lines);
+
+        return Results.success({
+            outputPath: outputPath,
+            totalEntryCount: entries.length,
+            uniqueSourceCount: this.countUniqueSources(entries)
         });
     }
 
@@ -56,5 +75,21 @@ export class TranslationCsvWriter {
         const escapedValue: string = value.replaceAll("\"", "\"\"");
         return `"${escapedValue}"`;
     }
-}
 
+    private countUniqueSources(entries: readonly TranslationEntry[]): number {
+        const seenSources: Set<string> = new Set<string>();
+
+        for (const entry of entries) {
+            seenSources.add(entry.sourceText);
+        }
+
+        return seenSources.size;
+    }
+
+    private async writeLines(outputPath: string, lines: readonly string[]): Promise<void> {
+        const outputDirectoryPath: string = path.dirname(outputPath);
+
+        await mkdir(outputDirectoryPath, { recursive: true });
+        await writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
+    }
+}

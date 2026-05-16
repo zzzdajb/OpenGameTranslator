@@ -43,9 +43,10 @@ The runtime waits until `tyrano.plugin.kag.tag.text.showMessage` exists, then wr
 
 ## Manual Test Scope
 
-Windows in-game testing is still required later for:
+Windows in-game smoke testing has passed for the current target game. Broader testing is still useful for:
 
-- Confirming script loading from the actual game folder.
-- Confirming translated text appears in the message window.
 - Confirming backlog behavior.
 - Confirming font rendering.
+- Confirming menus, save/load, replay, and late-game routes.
+
+See `设计和文档/Windows手动安装说明.md` for the current manual installation steps.
