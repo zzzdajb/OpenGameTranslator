@@ -9,6 +9,8 @@ import { TranslationCsvReader } from "../core/TranslationCsvReader.js";
 import type { TranslationCsvValidationResult } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvValidator } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvWriter } from "../core/TranslationCsvWriter.js";
+import { TranslationPackageBuilder } from "../core/TranslationPackageBuilder.js";
+import { TranslationPackageWriter } from "../core/TranslationPackageWriter.js";
 
 interface DetectedEngine {
     readonly adapter: GameEngineAdapter;
@@ -50,6 +52,10 @@ class CliApplication {
 
         if (commandName === "validate") {
             return await this.runValidate(args);
+        }
+
+        if (commandName === "build") {
+            return await this.runBuild(args);
         }
 
         this.logger.error(`Unknown command: ${commandName}`);
@@ -98,6 +104,54 @@ class CliApplication {
         this.printCsvValidationResult(readResult.value.filePath, validationResult);
 
         return validationResult.hasErrors ? 1 : 0;
+    }
+
+    private async runBuild(args: readonly string[]): Promise<number> {
+        const csvPath: string | undefined = args[1];
+        const outputPath: string | undefined = args[2];
+
+        if (csvPath === undefined || outputPath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator build <translation-csv> <output-json>");
+            return 1;
+        }
+
+        const reader: TranslationCsvReader = new TranslationCsvReader();
+        const readResult = await reader.read(csvPath);
+
+        if (!readResult.isSuccess) {
+            this.logger.error(readResult.errorMessage);
+            return 1;
+        }
+
+        const validator: TranslationCsvValidator = new TranslationCsvValidator();
+        const validationResult: TranslationCsvValidationResult = validator.validate(readResult.value.entries);
+
+        if (validationResult.hasErrors) {
+            this.printCsvValidationResult(readResult.value.filePath, validationResult);
+            return 1;
+        }
+
+        const builder: TranslationPackageBuilder = new TranslationPackageBuilder();
+        const buildResult = builder.build(readResult.value.entries);
+
+        if (!buildResult.isSuccess) {
+            this.logger.error(buildResult.errorMessage);
+            return 1;
+        }
+
+        const writer: TranslationPackageWriter = new TranslationPackageWriter();
+        const writeResult = await writer.write(outputPath, buildResult.value.packageData);
+
+        if (!writeResult.isSuccess) {
+            this.logger.error(writeResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Input rows: ${buildResult.value.inputRowCount}`);
+        this.logger.info(`Package entries: ${buildResult.value.packageEntryCount}`);
+        this.logger.info(`Output package: ${writeResult.value.outputPath}`);
+
+        return 0;
     }
 
     private async runExtract(args: readonly string[]): Promise<number> {
@@ -200,11 +254,13 @@ class CliApplication {
         this.logger.info("  opengametranslator detect <game-path>");
         this.logger.info("  opengametranslator extract <game-path> <output-csv>");
         this.logger.info("  opengametranslator validate <translation-csv>");
+        this.logger.info("  opengametranslator build <translation-csv> <output-json>");
         this.logger.info("");
         this.logger.info("Commands:");
         this.logger.info("  detect    Detect the game engine from a local game directory.");
         this.logger.info("  extract   Extract translatable text to a two-column CSV.");
         this.logger.info("  validate  Validate a two-column translation CSV.");
+        this.logger.info("  build     Build a runtime translation package from CSV.");
     }
 }
 
