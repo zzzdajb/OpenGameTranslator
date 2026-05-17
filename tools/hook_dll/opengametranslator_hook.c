@@ -856,7 +856,7 @@ static __declspec(naked) void DetourUpdateText7(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelUpdateText7
         call LogTextCall
