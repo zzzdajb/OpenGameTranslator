@@ -1,6 +1,8 @@
-# Windows 托管安装说明
+# Windows TyranoScript 托管安装说明
 
-这份说明记录当前《背信少女》的 Windows 使用方式。普通用户不需要手动编辑 `index.html`；由工具自动备份、修改、生成 manifest，并提供还原入口。
+这份说明记录 TyranoScript 游戏的 Windows 托管安装方式。《背信少女》是当前代表验证游戏，用于展示命令格式。
+
+普通用户不需要手动编辑 `index.html`；由工具自动备份、修改、生成 manifest，并提供还原入口。
 
 ## 1. 准备翻译包
 
@@ -18,6 +20,15 @@ npm run dev -- build output/perfedygirl.repaired.csv output/perfedygirl.package.
 ```
 
 ## 2. 生成托管安装
+
+通用命令：
+
+```bash
+npm run dev -- install "<game-path>" <translation-package> <game-exe-name>
+npm run dev -- verify-install "<game-path>"
+```
+
+《背信少女》示例：
 
 ```bash
 npm run dev -- install "games/背信少女25.1.28补" output/perfedygirl.package.json perfedygirl01.exe
