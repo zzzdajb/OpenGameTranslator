@@ -358,6 +358,12 @@ class CliApplication {
         this.logger.info(`Run script: ${installResult.value.runBatPath}`);
         this.logger.info(`Restore script: ${installResult.value.restoreBatPath}`);
 
+        if (installResult.value.projectJsonPatched) {
+            this.logger.info(`Project JSON patched: yes (${installResult.value.projectJsonReplacedCount} replacements)`);
+        } else {
+            this.logger.info("Project JSON patched: no");
+        }
+
         return 0;
     }
 
@@ -379,6 +385,7 @@ class CliApplication {
 
         this.logger.info(`Restored file: ${uninstallResult.value.restoredFilePath}`);
         this.logger.info(`Backup file: ${uninstallResult.value.backupFilePath}`);
+        this.logger.info(`Project JSON restored: ${uninstallResult.value.projectJsonRestored ? "yes" : "no"}`);
 
         return 0;
     }

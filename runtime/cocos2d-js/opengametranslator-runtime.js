@@ -6,6 +6,12 @@
         "OpenGameTranslator/opengametranslator.package.json",
         "Resources/OpenGameTranslator/opengametranslator.package.json"
     ];
+    var PROJECT_JSON_PATHS = [
+        "data/project.json",
+        "project.json",
+        "Resources/data/project.json"
+    ];
+    var MAX_PROJECT_JSON_SIZE = 200 * 1024 * 1024;
 
     var state = {
         formatVersion: 1,
@@ -14,6 +20,11 @@
         packagePath: null,
         isPackageLoaded: false,
         translationCount: 0,
+        projectJsonPatched: false,
+        projectJsonPath: null,
+        projectJsonBackupPath: null,
+        projectJsonReplacedCount: 0,
+        jsonParsePatchCount: 0,
         projectJsonPatchCount: 0,
         replacedTextCount: 0,
         setStringReplaceCount: 0,
@@ -25,6 +36,8 @@
 
     function start() {
         loadPackage();
+        probeAndPatchProjectJson();
+        installJsonParseHook();
         installFileReadHook();
         installTextHookAfterEngineLoaded();
         exposeDebugApi();
@@ -87,6 +100,114 @@
         }
 
         return result;
+    }
+
+    function probeAndPatchProjectJson() {
+        if (!state.isPackageLoaded) {
+            return;
+        }
+
+        var fileUtils = getFileUtils();
+
+        if (!fileUtils || !fileUtils.getStringFromFile || !fileUtils.writeStringToFile) {
+            state.notes.push("Cannot patch project.json: fileUtils not available.");
+            return;
+        }
+
+        for (var i = 0; i < PROJECT_JSON_PATHS.length; i += 1) {
+            var projectPath = PROJECT_JSON_PATHS[i];
+
+            try {
+                var text = fileUtils.getStringFromFile(projectPath);
+
+                if (!text || text.length <= 0 || text.length > MAX_PROJECT_JSON_SIZE) {
+                    continue;
+                }
+
+                var projectData = JSON.parse(text);
+                var before = state.replacedTextCount;
+                replaceStringValues(projectData, 0);
+                var replaced = state.replacedTextCount - before;
+
+                if (replaced <= 0) {
+                    state.projectJsonPath = projectPath;
+                    state.projectJsonPatched = true;
+                    state.notes.push("project.json read but no strings matched for replacement.");
+                    return;
+                }
+
+                // Backup original before writing patched version.
+                var backupPath = "OpenGameTranslator/backups/project.json.bak";
+                try {
+                    fileUtils.createDirectory && fileUtils.createDirectory("OpenGameTranslator/backups");
+                    fileUtils.writeStringToFile(text, backupPath);
+                    state.projectJsonBackupPath = backupPath;
+                } catch (backupError) {
+                    state.notes.push("Failed to back up project.json: " + backupError);
+                }
+
+                // Write translated JSON so CLI can pick it up and deploy.
+                var patchedText = JSON.stringify(projectData);
+                var outputPaths = buildTranslatedOutputPaths(fileUtils);
+                var writeOk = false;
+
+                for (var pi = 0; pi < outputPaths.length; pi += 1) {
+                    try {
+                        ensureDirectory(fileUtils, dirname(outputPaths[pi]));
+                        writeOk = fileUtils.writeStringToFile(patchedText, outputPaths[pi]);
+                        if (writeOk) {
+                            break;
+                        }
+                    } catch (writeError) {
+                        state.notes.push("Write attempt " + outputPaths[pi] + " failed: " + writeError);
+                    }
+                }
+
+                if (!writeOk) {
+                    state.notes.push("Failed to write translated project.json to any path.");
+                    return;
+                }
+
+                state.projectJsonPatched = true;
+                state.projectJsonPath = projectPath;
+                state.projectJsonReplacedCount = replaced;
+                writeStatus("project-json-patched");
+                return;
+            } catch (error) {
+                state.notes.push("Failed to patch " + projectPath + ": " + error);
+            }
+        }
+
+        state.notes.push("Could not find or patch any project.json.");
+    }
+
+    function installJsonParseHook() {
+        if (!GLOBAL.JSON || !GLOBAL.JSON.parse || GLOBAL.JSON.parse.__openGameTranslatorRuntime) {
+            return;
+        }
+
+        var originalJsonParse = GLOBAL.JSON.parse;
+
+        GLOBAL.JSON.parse = function () {
+            var parsed = originalJsonParse.apply(GLOBAL.JSON, arguments);
+
+            try {
+                if (state.isPackageLoaded) {
+                    var before = state.replacedTextCount;
+                    replaceStringValues(parsed, 0);
+                    if (state.replacedTextCount > before) {
+                        state.jsonParsePatchCount += 1;
+                        writeStatus("json-parse");
+                    }
+                }
+            } catch (error) {
+                state.notes.push("JSON.parse hook failed: " + error);
+            }
+
+            return parsed;
+        };
+
+        GLOBAL.JSON.parse.__openGameTranslatorRuntime = true;
     }
 
     function installFileReadHook() {
@@ -298,6 +419,11 @@
             packagePath: state.packagePath,
             isPackageLoaded: state.isPackageLoaded,
             translationCount: state.translationCount,
+            projectJsonPatched: state.projectJsonPatched,
+            projectJsonPath: state.projectJsonPath,
+            projectJsonBackupPath: state.projectJsonBackupPath,
+            projectJsonReplacedCount: state.projectJsonReplacedCount,
+            jsonParsePatchCount: state.jsonParsePatchCount,
             projectJsonPatchCount: state.projectJsonPatchCount,
             replacedTextCount: state.replacedTextCount,
             setStringReplaceCount: state.setStringReplaceCount,
@@ -318,6 +444,53 @@
                 // Status writing is best-effort only.
             }
         }
+    }
+
+    function buildTranslatedOutputPaths(fileUtils) {
+        var paths = [];
+
+        // Prefer writable path for large file writes.
+        try {
+            if (fileUtils.getWritablePath) {
+                var wp = fileUtils.getWritablePath();
+                if (wp) {
+                    paths.push(joinPath(wp, "OpenGameTranslator/output/opengametranslator-translated-project.json"));
+                    paths.push(joinPath(wp, "opengametranslator-translated-project.json"));
+                }
+            }
+        } catch (error) {
+            // Best-effort.
+        }
+
+        // Fall back to search-path-relative paths.
+        paths.push("OpenGameTranslator/output/opengametranslator-translated-project.json");
+        paths.push("Resources/OpenGameTranslator/output/opengametranslator-translated-project.json");
+
+        return paths;
+    }
+
+    function ensureDirectory(fileUtils, directoryPath) {
+        if (!directoryPath || typeof fileUtils.createDirectory !== "function") {
+            return;
+        }
+
+        try {
+            fileUtils.createDirectory(directoryPath);
+        } catch (error) {
+            // Best-effort.
+        }
+    }
+
+    function joinPath(basePath, childPath) {
+        if (!basePath) {
+            return childPath;
+        }
+
+        if (basePath.charAt(basePath.length - 1) === "/" || basePath.charAt(basePath.length - 1) === "\\") {
+            return basePath + childPath;
+        }
+
+        return basePath + "/" + childPath;
     }
 
     function dirname(filePath) {
