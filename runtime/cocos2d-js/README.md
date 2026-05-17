@@ -102,5 +102,6 @@ npm run dev -- uninstall-cocos "games/maya"
 
 - 导出 runtime 只负责提取文本；翻译 runtime 才负责替换文本。
 - 当前 Cocos2d-JS 支持会修改 `Resources/script/jsb_boot.js`，但会先备份原文件并写 manifest。
-- 翻译 runtime 不修改 `Resources/data/project.json` 源文件，只在读取时返回内存中的替换版本。
+- `install-cocos` 对 `Resources/data/project.json` 是 best-effort 托管修改：只有当它已经是可解析的明文 JSON 时才会备份并写回替换版本。
+- `games/maya` 这类 AGTK 样本的剧情对话不在 `project.json` 中，完整剧情翻译需要继续验证 native hook。
 - Cocos2d-JS 的工作目录暂时放在 `Resources/OpenGameTranslator/`，因为 JSB 的 `require()` 更容易从 `Resources` 搜索路径加载运行时代码。

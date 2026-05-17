@@ -178,6 +178,138 @@
         return result;
     }
 
+    /* === Structural Analysis for project.json === */
+    var structuralData = {
+        projectKeys: [],
+        keyPathMap: {},
+        messageShows: [],
+        scrollMessageShows: [],
+        objectsWithTextId: [],
+        textListEntries: [],
+        objectsWithTextField: [],
+        variableList: [],
+        textIdToPath: {},
+        notes: []
+    };
+
+    function structuralScanJson(obj, source, basePath, depth) {
+        if (!obj || typeof obj !== "object" || depth > 25) return;
+        if (basePath === undefined) basePath = "";
+        if (depth === undefined) depth = 0;
+
+        if (Object.prototype.toString.call(obj) === "[object Array]") {
+            for (var i = 0; i < Math.min(obj.length, 5000); i++) {
+                structuralScanJson(obj[i], source, basePath + "[" + i + "]", depth + 1);
+            }
+            return;
+        }
+
+        try {
+            var keys = Object.keys(obj);
+
+            // Build key path map.
+            for (var ki = 0; ki < Math.min(keys.length, 200); ki++) {
+                var k = keys[ki];
+                var path = basePath + "." + k;
+                if (!structuralData.keyPathMap[k]) structuralData.keyPathMap[k] = [];
+                if (structuralData.keyPathMap[k].length < 15) structuralData.keyPathMap[k].push(path);
+            }
+
+            // Detect messageShow commands.
+            if (typeof obj.messageShow === "object" && obj.messageShow !== null) {
+                structuralData.messageShows.push({
+                    path: basePath + ".messageShow",
+                    data: JSON.parse(JSON.stringify(obj.messageShow))
+                });
+            }
+
+            // Detect scrollMessageShow commands.
+            if (typeof obj.scrollMessageShow === "object" && obj.scrollMessageShow !== null) {
+                structuralData.scrollMessageShows.push({
+                    path: basePath + ".scrollMessageShow",
+                    data: JSON.parse(JSON.stringify(obj.scrollMessageShow))
+                });
+            }
+
+            // Collect objects with textId.
+            if (obj.hasOwnProperty("textId")) {
+                var entry = { path: basePath, textId: obj.textId, textFlag: obj.textFlag };
+                // Deep-copy all fields for first 30 entries.
+                if (structuralData.objectsWithTextId.length < 30) {
+                    entry.sample = JSON.parse(JSON.stringify(obj));
+                }
+                structuralData.objectsWithTextId.push(entry);
+                // Map textId -> path.
+                if (!structuralData.textIdToPath[String(obj.textId)]) {
+                    structuralData.textIdToPath[String(obj.textId)] = [];
+                }
+                if (structuralData.textIdToPath[String(obj.textId)].length < 10) {
+                    structuralData.textIdToPath[String(obj.textId)].push(basePath);
+                }
+            }
+
+            // Collect textList data.
+            if (basePath.indexOf("textList") !== -1 && !Array.isArray(obj)) {
+                structuralData.textListEntries.push({
+                    path: basePath,
+                    keys: keys.slice(0, 30),
+                    sample: JSON.parse(JSON.stringify(obj))
+                });
+            }
+
+            // Collect variableList data.
+            if (basePath.indexOf("variableList") !== -1 && !Array.isArray(obj)) {
+                if (structuralData.variableList.length < 200) {
+                    structuralData.variableList.push({
+                        path: basePath,
+                        keys: keys.slice(0, 20),
+                        sample: JSON.parse(JSON.stringify(obj))
+                    });
+                }
+            }
+
+            // Collect any object with a "text" field (potential dialogue container).
+            if (typeof obj.text === "string" && obj.text.length > 0) {
+                if (structuralData.objectsWithTextField.length < 500) {
+                    structuralData.objectsWithTextField.push({
+                        path: basePath,
+                        textLen: obj.text.length,
+                        textPreview: obj.text.length > 100 ? obj.text.slice(0, 100) + "..." : obj.text,
+                        keys: keys.slice(0, 15)
+                    });
+                }
+            }
+
+            // Recurse.
+            for (var kj = 0; kj < Math.min(keys.length, 1000); kj++) {
+                var key = keys[kj];
+                var val = obj[key];
+                if (val !== null && typeof val === "object") {
+                    structuralScanJson(val, source, basePath + "." + key, depth + 1);
+                }
+            }
+        } catch (e) {
+            structuralData.notes.push("Error at " + basePath + ": " + e);
+        }
+    }
+
+    function flushStructuralData() {
+        var fileUtils = getFileUtils();
+        if (!fileUtils || !fileUtils.writeStringToFile) return;
+
+        var out = JSON.stringify(structuralData, null, 2);
+        var paths = [
+            "OpenGameTranslator/output/opengametranslator-structural.json",
+            "Resources/OpenGameTranslator/output/opengametranslator-structural.json"
+        ];
+        for (var pi = 0; pi < paths.length; pi++) {
+            try {
+                fileUtils.createDirectory && fileUtils.createDirectory("OpenGameTranslator/output");
+                if (fileUtils.writeStringToFile(out, paths[pi])) return;
+            } catch (e) {}
+        }
+    }
+
     function installJsonParseProbe() {
         if (!GLOBAL.JSON || !GLOBAL.JSON.parse || GLOBAL.JSON.parse.__openGameTranslatorProbe) {
             return;
@@ -243,11 +375,32 @@
             return;
         }
 
+        var hasText = /[\u3040-\u30ff\u3400-\u9fff\uff01-\uff60]/.test(text);
+
         state.fileReads.push({
             path: filePath,
             length: text.length,
-            hasTextCandidate: /[\u3040-\u30ff\u3400-\u9fff\uff01-\uff60]/.test(text)
+            hasTextCandidate: hasText,
+            firstChars: text.length > 0 ? text.slice(0, 80) : ""
         });
+
+        // When a new file with Japanese text is read, scan it as JSON too.
+        if (hasText && text.length > 100 && text.length < 50 * 1024 * 1024) {
+            try {
+                var parsed = JSON.parse(text);
+                scanJsonValue(parsed, "file:" + filePath, "", 0);
+                state.notes.push("Scanned new file: " + filePath + " (" + text.length + " chars)");
+            } catch (e) {
+                // Not JSON \u2014 try scanning as plain text.
+                scanPlainText(text, "file:" + filePath);
+            }
+        }
+
+        // Flush after new non-project.json file reads so we capture scene data.
+        if (state.fileReads.length > 8 && state.fileReads.length % 5 === 0) {
+            flushProbeData("file-read-" + state.fileReads.length);
+            flushStructuralData();
+        }
     }
 
     function probeKnownFiles() {
@@ -319,8 +472,20 @@
         currentJsonSource = source;
 
         try {
-            JSON.parse(text);
+            var parsed = JSON.parse(text);
             entry.json = "ok";
+
+            // Structural analysis for project.json.
+            if (/project\.json/i.test(source)) {
+                structuralScanJson(parsed, source, "", 0);
+                structuralData.projectKeys = Object.keys(parsed).sort();
+                structuralData.notes.push("messageShows: " + structuralData.messageShows.length +
+                    ", objectsWithTextId: " + structuralData.objectsWithTextId.length +
+                    ", textListEntries: " + structuralData.textListEntries.length +
+                    ", variableList: " + structuralData.variableList.length +
+                    ", objectsWithTextField: " + structuralData.objectsWithTextField.length);
+            }
+
             currentJsonSource = null;
             return true;
         } catch (error) {
@@ -850,6 +1015,7 @@
                 }
 
                 flushProbeData("phase-1-global-scan");
+                flushStructuralData();
             } catch (error) {
                 state.notes.push("Phase-1 scan failed: " + error);
             }
@@ -878,6 +1044,7 @@
                 scanObjectTree(GLOBAL, "GLOBAL-phase2", 6);
 
                 flushProbeData("phase-2-deep-scan");
+                flushStructuralData();
             } catch (error) {
                 state.notes.push("Phase-2 scan failed: " + error);
             }
@@ -981,8 +1148,10 @@
         probeKnownFiles();
         installTextHookAfterEngineLoaded();
         installConstructorHooks();
+        dumpModuleInfo();
         scheduleGlobalObjectScan();
         flushProbeData("startup");
+        flushStructuralData();
         log("runtime probe installed");
     } catch (error) {
         log("runtime probe failed: " + error);

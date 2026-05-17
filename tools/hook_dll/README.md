@@ -1,0 +1,83 @@
+# AGTK / Cocos2d-JS native 诊断工具
+
+这里的工具只用于确认 AGTK / Cocos2d-JS 游戏的原生文本函数位置，并抓取进入文本显示函数的参数。当前阶段是诊断，不会替换文本，也不会修改游戏资源文件。
+
+## 1. 构建
+
+在 Windows 的普通 `cmd.exe` 中运行：
+
+```bat
+cd /d C:\York\Works\Programming\OpenGameTranslator\tools\hook_dll
+build.bat
+```
+
+预期生成：
+
+```text
+opengametranslator_hook.dll
+injector.exe
+```
+
+注意：`player.exe` 是 32-bit 程序，所以脚本会强制构建 x86 DLL 和 x86 注入器。
+
+## 2. 运行游戏
+
+如果之前已经注入过诊断 DLL，先关闭游戏再重新启动。Windows 对同一路径 DLL 会复用已加载模块，不重启游戏可能不会加载新版 DLL。
+
+启动游戏，并尽量进入能看到真实对话文本的位置：
+
+```bat
+cd /d C:\York\Works\Programming\OpenGameTranslator\games\maya
+run-me.bat
+```
+
+## 3. 注入诊断 DLL
+
+游戏保持运行，再打开一个新的 `cmd.exe`：
+
+```bat
+cd /d C:\York\Works\Programming\OpenGameTranslator\tools\hook_dll
+injector.exe player.exe opengametranslator_hook.dll
+```
+
+如果提示 `OpenProcess failed`，用“以管理员身份运行”的 `cmd.exe` 重试。
+
+## 4. 需要提供给 Codex 的信息
+
+运行后请提供这些内容：
+
+- 注入器命令行输出。
+- `%LOCALAPPDATA%\player\opengametranslator_hook_diag.txt`
+- `C:\York\Works\Programming\OpenGameTranslator\games\maya\action_log.txt`
+- 注入时游戏大概停在哪个画面，例如标题、菜单、第一句对话。
+
+如果诊断日志里能看到 `.?AVTextGui@agtk@@` 或 `TextGui@agtk@@`，说明可以继续定位 AGTK 文本函数。否则要调整 native 扫描策略。
+
+## 5. 挂起启动注入（推荐用于捕获初始化文本）
+
+游戏可能在启动时一次性创建所有文本纹理，注入晚了就抓不到。用 `launcher.exe` 以挂起方式创建游戏进程，注入 DLL 后再恢复：
+
+```bat
+cd /d C:\York\Works\Programming\OpenGameTranslator\tools\hook_dll
+launcher.exe "C:\York\Works\Programming\OpenGameTranslator\games\maya\player.exe" opengametranslator_hook.dll
+```
+
+这样 DLL 会在游戏加载任何资源之前就位，能捕获到启动时的所有文本调用。
+
+新版诊断 DLL 还会尝试 hook 这些导出函数：
+
+- `TextGui::updateText`
+- `TextGui::updateTextRender`
+- `TextData::getText`
+- `FontManager::createOrSetWithFontData`
+- `TextLineNode::create`
+- `TextLineNode::init`
+- `cocos2d::Texture2D::initWithString`
+- `cocos2d::Label::setString`
+- `cocos2d::LabelBMFont::setString`
+- `cocos2d::LabelTTF::setString`
+- `cocos2d::LabelAtlas::setString`
+- `cocos2d::ui::Text::setString/setText`
+- `cocos2d::ui::TextBMFont::setString/setText`
+
+如果日志里出现 `[TextHook:...]`、`[TextData:...]`、`[CStringHook:...]` 或 `[StringHook:...]` 行，说明已经截获到 AGTK/Cocos 传给文本显示/查表函数的字符串。下一步才会设计真正的翻译替换逻辑。

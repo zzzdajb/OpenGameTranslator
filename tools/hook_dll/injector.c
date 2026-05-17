@@ -8,6 +8,60 @@
 #include <stdio.h>
 #include <string.h>
 
+static int ends_with_exe(const char *name) {
+    size_t len = strlen(name);
+    return len >= 4 && _stricmp(name + len - 4, ".exe") == 0;
+}
+
+static int process_name_matches(const char *actualName, const char *requestedName) {
+    char requestedWithExe[MAX_PATH];
+
+    if (_stricmp(actualName, requestedName) == 0) {
+        return 1;
+    }
+
+    if (ends_with_exe(requestedName)) {
+        return 0;
+    }
+
+    _snprintf_s(requestedWithExe, sizeof(requestedWithExe), _TRUNCATE, "%s.exe", requestedName);
+    return _stricmp(actualName, requestedWithExe) == 0;
+}
+
+static DWORD find_process_id(const char *procName) {
+    DWORD pid = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+    if (snap == INVALID_HANDLE_VALUE) {
+        printf("CreateToolhelp32Snapshot failed: %lu\n", GetLastError());
+        return 0;
+    }
+
+    PROCESSENTRY32 pe;
+    memset(&pe, 0, sizeof(pe));
+    pe.dwSize = sizeof(pe);
+
+    if (Process32First(snap, &pe)) {
+        do {
+            char exeName[MAX_PATH];
+
+#ifdef UNICODE
+            WideCharToMultiByte(CP_ACP, 0, pe.szExeFile, -1, exeName, sizeof(exeName), NULL, NULL);
+#else
+            strcpy_s(exeName, sizeof(exeName), pe.szExeFile);
+#endif
+
+            if (process_name_matches(exeName, procName)) {
+                pid = pe.th32ProcessID;
+                break;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+
+    CloseHandle(snap);
+    return pid;
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: injector.exe <process.exe> <hook.dll>\n");
@@ -17,29 +71,7 @@ int main(int argc, char *argv[]) {
     const char *procName = argv[1];
     const char *dllPath = argv[2];
 
-    /* Find the process ID. */
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) {
-        printf("CreateToolhelp32Snapshot failed: %lu\n", GetLastError());
-        return 1;
-    }
-
-    PROCESSENTRY32 pe;
-    pe.dwSize = sizeof(pe);
-    DWORD pid = 0;
-    if (Process32First(snap, &pe)) {
-        do {
-            /* Compare case-insensitively, handling possible .exe suffix mismatch. */
-            char exeName[260];
-            WideCharToMultiByte(CP_ACP, 0, pe.szExeFile, -1, exeName, sizeof(exeName), NULL, NULL);
-            if (_stricmp(exeName, procName) == 0) {
-                pid = pe.th32ProcessID;
-                break;
-            }
-        } while (Process32Next(snap, &pe));
-    }
-    CloseHandle(snap);
-
+    DWORD pid = find_process_id(procName);
     if (!pid) {
         printf("Process '%s' not found.\n", procName);
         return 1;
@@ -53,7 +85,7 @@ int main(int argc, char *argv[]) {
     }
     printf("DLL: %s\n", fullPath);
 
-    /* Allocate memory in target process for the DLL path. */
+    /* Allocate memory in the target process for the DLL path. */
     HANDLE hProc = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                                PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
                                FALSE, pid);

@@ -1,26 +1,63 @@
 @echo off
 setlocal
 
-set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
-set "MSVC_VER=14.44.35207"
-set "SDK_VER=10.0.26100.0"
+set "VCVARS="
 
-set "MSVC=%VSROOT%\VC\Tools\MSVC\%MSVC_VER%"
-set "SDK=C:\Program Files (x86)\Windows Kits\10"
+rem Use 8.3 short paths here to avoid cmd.exe parsing issues with "(x86)".
+if exist "C:\Progra~2\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARS=C:\Progra~2\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+if not defined VCVARS if exist "C:\Progra~1\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARS=C:\Progra~1\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+if not defined VCVARS if exist "C:\Progra~1\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARS=C:\Progra~1\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat"
+if not defined VCVARS if exist "C:\Progra~1\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARS=C:\Progra~1\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat"
+if not defined VCVARS if exist "C:\Progra~1\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" set "VCVARS=C:\Progra~1\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
 
-set "CL=%MSVC%\bin\Hostx64\x64\cl.exe"
-set "INCLUDE=%MSVC%\include;%SDK%\Include\%SDK_VER%\ucrt;%SDK%\Include\%SDK_VER%\um;%SDK%\Include\%SDK_VER%\shared"
-set "LIB=%MSVC%\lib\x64;%SDK%\Lib\%SDK_VER%\ucrt\x64;%SDK%\Lib\%SDK_VER%\um\x64"
+if not exist "%VCVARS%" (
+    echo Visual Studio C++ build tools were not found.
+    echo Expected: %VCVARS%
+    exit /b 1
+)
 
-"%CL%" /nologo /LD /O2 /MT ^
+rem player.exe is a 32-bit process, so both the hook DLL and injector must be x86.
+call "%VCVARS%" x86 >nul
+if errorlevel 1 (
+    echo Failed to initialize the x86 MSVC build environment.
+    exit /b 1
+)
+
+echo Building x86 diagnostic hook DLL...
+cl /nologo /LD /Od /MT /W3 /D_CRT_SECURE_NO_WARNINGS ^
     opengametranslator_hook.c ^
     /Fe:opengametranslator_hook.dll ^
-    /link /NODEFAULTLIB:libcmt.lib kernel32.lib user32.lib
+    /link kernel32.lib user32.lib
 
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo Build successful: opengametranslator_hook.dll
-) else (
-    echo.
-    echo Build FAILED.
+if errorlevel 1 (
+    echo Build FAILED: opengametranslator_hook.dll
+    exit /b 1
 )
+
+echo Building x86 injector...
+cl /nologo /Od /MT /W3 /D_CRT_SECURE_NO_WARNINGS ^
+    injector.c ^
+    /Fe:injector.exe ^
+    /link kernel32.lib
+
+if errorlevel 1 (
+    echo Build FAILED: injector.exe
+    exit /b 1
+)
+
+echo Building x86 launcher...
+cl /nologo /Od /MT /W3 /D_CRT_SECURE_NO_WARNINGS ^
+    launcher.c ^
+    /Fe:launcher.exe ^
+    /link kernel32.lib
+
+if errorlevel 1 (
+    echo Build FAILED: launcher.exe
+    exit /b 1
+)
+
+echo.
+echo Build successful:
+echo   opengametranslator_hook.dll
+echo   injector.exe
+echo   launcher.exe
