@@ -225,7 +225,7 @@ static int ReadMsvcStdString(const void *stringArg, char *output, DWORD outputSi
         if (outSize) *outSize = size;
         if (outCapacity) *outCapacity = capacity;
 
-        if (size == 0 || size > 2048 || capacity < size || capacity > 1024 * 1024) {
+        if (size > 2048 || capacity < size || capacity > 1024 * 1024) {
             return 0;
         }
 
@@ -1267,33 +1267,20 @@ static __declspec(naked) void DetourSqlite3Open(void) {
 
 /*
  * TextGui::getString: thiscall, returns std::string by value (hidden ptr at [esp+4]).
- * CALL-based detour: captures the result string AFTER getString constructs it.
+ * JMP-based: CALL-based detours break thiscall ebp-relative parameter access,
+ * so we only log that getString was called with the hidden-ptr address.
  */
 static __declspec(naked) void DetourTextGuiGetString(void) {
     __asm {
         pushfd
         pushad
-        push dword ptr [esp + 40]  /* hidden return string ptr (uninit before call) */
+        push dword ptr [esp + 40]  /* hidden return string ptr address */
         push OFFSET g_labelTextGuiGetString
         call LogCStringCall
         add esp, 8
         popad
         popfd
-        /* Call original via trampoline. */
-        call dword ptr [g_textGuiGetStringTrampoline]
-        /* eax = hidden return pointer. The result std::string has been constructed.
-           Read it via LogStdStringRefCall. */
-        push eax              /* [esp+0] = hidden_ptr */
-        pushfd                /* [esp+0]=eflags, [esp+4]=hidden_ptr */
-        pushad                /* [esp+0..27]=regs, [esp+28]=EAX, [esp+32]=eflags, [esp+36]=hidden_ptr */
-        push dword ptr [esp + 36]  /* hidden_ptr — the constructed result std::string */
-        push OFFSET g_labelTextGuiGetStringResult
-        call LogStdStringRefCall
-        add esp, 8
-        popad
-        popfd
-        pop eax               /* restore eax */
-        ret
+        jmp dword ptr [g_textGuiGetStringTrampoline]
     }
 }
 #endif
