@@ -277,6 +277,55 @@ Windows 侧先只做诊断，不做文本替换。操作步骤见 `tools/hook_dl
 
 ### 10.5 下一步（当前会话）
 
-- [ ] 增强探针：追踪**所有文件读取**（包括场景加载时），不只启动时
-- [ ] 定位场景数据加载路径——对话可能在场景切换时读入
-- [ ] 如果确认无额外文件读取，分析 objectList 中是否有二进制编码的文本数据
+- [x] 增强探针：追踪**所有文件读取**（包括场景加载时），不只启动时
+- [x] 定位场景数据加载路径——对话可能在场景切换时读入
+- [x] 分析 objectList 中是否有二进制编码的文本数据
+
+### 10.6 SQLite 调查（2026-05-17 深夜）
+
+- 游戏目录存在 `sqlite3.dll`，MTool 的 AgtkHook 代理此 DLL
+- Hook `sqlite3_open` 发现数据库路径为 `%LOCALAPPDATA%/player/jsb.sqlite`
+- 表结构：`CREATE TABLE IF NOT EXISTS data(key TEXT PRIMARY KEY, value TEXT)` —— 简单 KV 存储
+- 仅有 SAVE/LOAD 查询（`SELECT/REPLACE/DELETE`），**不包含任何游戏文本数据**
+- Hook 了 `sqlite3_column_text`、`sqlite3_column_text16`、`sqlite3_exec`、`sqlite3_prepare_v2`、`sqlite3_step`
+- **结论：SQLite 仅用于游戏存档，不存储对话文本**
+
+### 10.7 最终诊断结论（2026-05-17）
+
+**最终版本的 hook DLL（21 个 hook，涵盖 Cocos2d + AGTK + SQLite 全链路）：**
+
+| Hook | 目标 DLL | 对话期间被调用 | 捕获内容 |
+|------|---------|-------------|---------|
+| updateText-7/8 | player.exe | 是 | 空字符串 / "0" |
+| updateTextRender-7/8 | player.exe | 否 | - |
+| TextData::getText | player.exe | 否 | - |
+| FontManager::createOrSetWithFontData | player.exe | 否 | - |
+| TextLineNode::create/init | player.exe | 否 | - |
+| ProjectData::getExpandedText | player.exe | 否 | - |
+| ObjectAction::execActionMessageShow | player.exe | 是 | ObjectCommandData 指针 |
+| TextGui::getString | player.exe | 是 | 未初始化返回指针（CALL 式不可用） |
+| Texture2D::initWithString (×2) | libcocos2d.dll | 否 | - |
+| Label::setString 系列 (×5) | libcocos2d.dll | 否 | - |
+| ui::Text::setString/setText (×2) | libcocos2d.dll | 否 | - |
+| ui::TextBMFont::setString/setText (×2) | libcocos2d.dll | 否 | - |
+| sqlite3_column_text/16 | sqlite3.dll | 否 | - |
+| sqlite3_exec | sqlite3.dll | 是 | schema 查询 |
+| sqlite3_prepare_v2/step/open | sqlite3.dll | 是 | save data KV 操作 |
+
+**调用约定发现：**
+- MSVC x86 中，`std::string` 按值传参是直接压栈（24 字节），不是隐藏指针
+- 正确栈偏移：`lea eax, [esp+40]`（栈上对象地址），不是 `mov eax, [esp+40]`（错误解引用）
+- `const&` 参数：`mov eax, [esp+40]` 正确（引用即指针）
+- CALL 式 detour 破坏 thiscall 的 ebp 相对寻址，不可用于 thiscall 函数
+
+**工具链成果：**
+- `launcher.exe`：CREATE_SUSPENDED + 注入 + ResumeThread
+- `scan_dialogue.py`：双编码（UTF-8/Shift-JIS）内存扫描器
+- `quick_scan.py`：自动编码检测的快速提取器
+- JS 结构探针 + 全文件读取追踪
+
+**硬结论：**
+1. 对话文本通过 AGTK 图像字体系统（`imageFontFlag: true`）以字形索引方式渲染
+2. 文本从不以 std::string 形式存在于可访问内存中
+3. C++ 函数 hook 方案对 AGTK 图像字体游戏不可行
+4. 翻译此游戏需要：字体纹理替换、GPU 层 OCR、或反编译字形索引序列

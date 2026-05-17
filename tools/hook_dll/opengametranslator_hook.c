@@ -871,7 +871,7 @@ static __declspec(naked) void DetourUpdateText8(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelUpdateText8
         call LogTextCall
@@ -886,7 +886,7 @@ static __declspec(naked) void DetourUpdateTextRender7(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelUpdateTextRender7
         call LogTextCall
@@ -901,7 +901,7 @@ static __declspec(naked) void DetourUpdateTextRender8(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelUpdateTextRender8
         call LogTextCall
@@ -941,7 +941,7 @@ static __declspec(naked) void DetourTextLineNodeCreate(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelTextLineNodeCreate
         call LogTextCall
@@ -956,7 +956,7 @@ static __declspec(naked) void DetourTextLineNodeInit(void) {
     __asm {
         pushfd
         pushad
-        mov eax, [esp + 40]
+        lea eax, [esp + 40]
         push eax
         push OFFSET g_labelTextLineNodeInit
         call LogTextCall
