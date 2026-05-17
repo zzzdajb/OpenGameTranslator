@@ -602,14 +602,386 @@
         };
     }
 
+    // Walk any JS object tree and collect candidate texts from string values.
+    // This catches runtime-loaded data that never goes through JSON.parse or setString.
+    function scanObjectTree(obj, sourceName, maxDepth) {
+        if (!obj || typeof obj !== "object") {
+            return;
+        }
+
+        var visitedObjects = [];
+        var stringCount = 0;
+
+        function walk(value, path, depth) {
+            if (depth > (maxDepth || 12)) {
+                return;
+            }
+
+            if (value === null || typeof value === "undefined") {
+                return;
+            }
+
+            if (typeof value === "string") {
+                stringCount += 1;
+                collectCandidateText(value, sourceName, path);
+                return;
+            }
+
+            if (typeof value !== "object") {
+                return;
+            }
+
+            // Avoid circular references.
+            for (var vi = 0; vi < visitedObjects.length; vi += 1) {
+                if (visitedObjects[vi] === value) {
+                    return;
+                }
+            }
+
+            visitedObjects.push(value);
+
+            if (Object.prototype.toString.call(value) === "[object Array]") {
+                for (var i = 0; i < Math.min(value.length, 5000); i += 1) {
+                    walk(value[i], path + "[" + i + "]", depth + 1);
+                }
+
+                return;
+            }
+
+            // Skip native/C++ objects that have no enumerable JS properties.
+            try {
+                var keys = Object.keys(value);
+                if (keys.length === 0 && typeof value.toString === "function" && value.toString() === "[object Object]") {
+                    return; // Empty plain object, skip.
+                }
+
+                for (var ki = 0; ki < Math.min(keys.length, 2000); ki += 1) {
+                    var key = keys[ki];
+
+                    // Skip known noisy/recursive keys.
+                    if (key === "prototype" || key === "__proto__" || key === "parent" || key === "super" || key === "constructor") {
+                        continue;
+                    }
+
+                    try {
+                        walk(value[key], path + "." + key, depth + 1);
+                    } catch (accessError) {
+                        // Some properties throw on access (native getters).
+                    }
+                }
+            } catch (walkError) {
+                // Object might be opaque/native.
+            }
+        }
+
+        walk(obj, sourceName, 0);
+        state.notes.push(sourceName + " scan: " + stringCount + " strings visited, " + state.candidateTexts.length + " total candidates");
+    }
+
+    // Hook additional text APIs beyond setString that AGTK might use.
+    function installConstructorHooks() {
+        var targets = [];
+
+        if (GLOBAL.cc) {
+            targets.push({ name: "cc.LabelTTF", ctor: GLOBAL.cc.LabelTTF });
+            targets.push({ name: "cc.LabelBMFont", ctor: GLOBAL.cc.LabelBMFont });
+            targets.push({ name: "cc.LabelAtlas", ctor: GLOBAL.cc.LabelAtlas });
+        }
+
+        if (GLOBAL.ccui) {
+            targets.push({ name: "ccui.Text", ctor: GLOBAL.ccui.Text });
+            targets.push({ name: "ccui.TextField", ctor: GLOBAL.ccui.TextField });
+            targets.push({ name: "ccui.TextBMFont", ctor: GLOBAL.ccui.TextBMFont });
+        }
+
+        for (var ti = 0; ti < targets.length; ti += 1) {
+            var t = targets[ti];
+
+            if (!t.ctor || !t.ctor.prototype || t.ctor.prototype.__openGameTranslatorProbeCtor) {
+                continue;
+            }
+
+            // Hook initWithString if it exists.
+            if (typeof t.ctor.prototype.initWithString === "function" && !t.ctor.prototype.initWithString.__openGameTranslatorProbe) {
+                var origInit = t.ctor.prototype.initWithString;
+
+                t.ctor.prototype.initWithString = function () {
+                    if (arguments.length > 0 && typeof arguments[0] === "string") {
+                        collectDisplayedText(arguments[0], t.name + ".initWithString");
+                    }
+
+                    return origInit.apply(this, arguments);
+                };
+
+                t.ctor.prototype.initWithString.__openGameTranslatorProbe = true;
+                state.hooks.installedTargets.push(t.name + ".initWithString");
+            }
+
+            // Hook ctor (the create/constructor function) by wrapping the function itself.
+            if (!t.ctor.__openGameTranslatorProbeCtor) {
+                var origCtor = t.ctor;
+                var ctorName = t.name;
+
+                // Replace the constructor function with a wrapper that scans text arguments.
+                var wrappedCtor = function () {
+                    // Text is often the first argument of label constructors.
+                    if (arguments.length > 0 && typeof arguments[0] === "string") {
+                        collectDisplayedText(arguments[0], ctorName + ".ctor");
+                    }
+
+                    // Handle create() static method.
+                    return origCtor.apply(this, arguments);
+                };
+
+                // Copy static methods (like .create).
+                for (var sk in origCtor) {
+                    if (Object.prototype.hasOwnProperty.call(origCtor, sk)) {
+                        if (sk === "create" && typeof origCtor[sk] === "function" && !origCtor[sk].__openGameTranslatorProbe) {
+                            var origCreate = origCtor[sk];
+
+                            wrappedCtor[sk] = function () {
+                                if (arguments.length > 0 && typeof arguments[0] === "string") {
+                                    collectDisplayedText(arguments[0], ctorName + ".create");
+                                }
+
+                                return origCreate.apply(this, arguments);
+                            };
+
+                            wrappedCtor[sk].__openGameTranslatorProbe = true;
+                        } else {
+                            wrappedCtor[sk] = origCtor[sk];
+                        }
+                    }
+                }
+
+                wrappedCtor.prototype = origCtor.prototype;
+                wrappedCtor.__openGameTranslatorProbeCtor = true;
+
+                if (t.name === "cc.LabelTTF" && GLOBAL.cc) {
+                    GLOBAL.cc.LabelTTF = wrappedCtor;
+                } else if (t.name === "cc.LabelBMFont" && GLOBAL.cc) {
+                    GLOBAL.cc.LabelBMFont = wrappedCtor;
+                } else if (t.name === "cc.LabelAtlas" && GLOBAL.cc) {
+                    GLOBAL.cc.LabelAtlas = wrappedCtor;
+                } else if (t.name === "ccui.Text" && GLOBAL.ccui) {
+                    GLOBAL.ccui.Text = wrappedCtor;
+                } else if (t.name === "ccui.TextField" && GLOBAL.ccui) {
+                    GLOBAL.ccui.TextField = wrappedCtor;
+                } else if (t.name === "ccui.TextBMFont" && GLOBAL.ccui) {
+                    GLOBAL.ccui.TextBMFont = wrappedCtor;
+                }
+
+                state.hooks.installedTargets.push(t.name + ".ctor+create");
+            }
+        }
+    }
+
+    // Hook console.log to capture any text the game writes to console.
+    function installConsoleHook() {
+        if (!GLOBAL.console || !GLOBAL.console.log || GLOBAL.console.log.__openGameTranslatorProbe) {
+            return;
+        }
+
+        var origLog = GLOBAL.console.log;
+
+        GLOBAL.console.log = function () {
+            for (var i = 0; i < arguments.length; i += 1) {
+                if (typeof arguments[i] === "string") {
+                    collectCandidateText(arguments[i], "console.log", "arg:" + i);
+                }
+            }
+
+            return origLog.apply(GLOBAL.console, arguments);
+        };
+
+        GLOBAL.console.log.__openGameTranslatorProbe = true;
+    }
+
+    // Schedule a delayed scan of global objects after the game has initialized.
+    function scheduleGlobalObjectScan() {
+        // If setTimeout is not available, skip delayed scans.
+        if (typeof setTimeout !== "function") {
+            state.notes.push("setTimeout not available, skipping delayed scans.");
+            return;
+        }
+
+        // Phase 1: Scan after ~3 seconds (after init.js runs).
+        setTimeout(function () {
+            log("phase-1: scanning global objects");
+            try {
+                if (GLOBAL.Agtk) {
+                    scanObjectTree(GLOBAL.Agtk, "Agtk", 14);
+                }
+
+                // Also scan cc.director and scene-related objects.
+                if (GLOBAL.cc && GLOBAL.cc.director) {
+                    try {
+                        var runningScene = GLOBAL.cc.director.getRunningScene();
+                        if (runningScene) {
+                            scanObjectTree(runningScene, "cc.director.runningScene", 14);
+                        }
+                    } catch (e) {
+                        state.notes.push("Failed to scan running scene: " + e);
+                    }
+                }
+
+                // Scan plugins that may have loaded text data.
+                if (GLOBAL.Agtk && GLOBAL.Agtk.plugins && Array.isArray(GLOBAL.Agtk.plugins)) {
+                    for (var pi = 0; pi < GLOBAL.Agtk.plugins.length; pi += 1) {
+                        try {
+                            var plugin = GLOBAL.Agtk.plugins[pi];
+                            scanObjectTree(plugin, "Agtk.plugins[" + pi + "]", 14);
+
+                            // Try calling getInfo on plugins.
+                            if (typeof plugin.getInfo === "function") {
+                                try {
+                                    var info = plugin.getInfo("internal");
+                                    if (typeof info === "string" && info.length > 2) {
+                                        collectCandidateText(info, "plugin[" + pi + "].getInfo(internal)", "internal");
+                                    }
+                                } catch (e2) {
+                                    // getInfo may throw if not supported.
+                                }
+                            }
+                        } catch (pe) {
+                            // Plugin access may fail.
+                        }
+                    }
+                }
+
+                flushProbeData("phase-1-global-scan");
+            } catch (error) {
+                state.notes.push("Phase-1 scan failed: " + error);
+            }
+        }, 3000);
+
+        // Phase 2: Scan after ~10 seconds (game should be showing text).
+        setTimeout(function () {
+            log("phase-2: deep re-scan of global objects");
+            try {
+                if (GLOBAL.Agtk) {
+                    scanObjectTree(GLOBAL.Agtk, "Agtk-phase2", 16);
+                }
+
+                if (GLOBAL.cc && GLOBAL.cc.director) {
+                    try {
+                        var rs2 = GLOBAL.cc.director.getRunningScene();
+                        if (rs2) {
+                            scanObjectTree(rs2, "cc.director.runningScene-phase2", 16);
+                        }
+                    } catch (e) {
+                        state.notes.push("Phase-2 scene scan failed: " + e);
+                    }
+                }
+
+                // Scan ALL enumerable properties of the global object.
+                scanObjectTree(GLOBAL, "GLOBAL-phase2", 6);
+
+                flushProbeData("phase-2-deep-scan");
+            } catch (error) {
+                state.notes.push("Phase-2 scan failed: " + error);
+            }
+        }, 10000);
+    }
+
+    // Try every possible API to load a native DLL from JavaScript.
+    function tryLoadHookDll() {
+        var dllPaths = [
+            "OpenGameTranslator/runtime/cocos2d-js/opengametranslator_hook.dll",
+            "Resources/OpenGameTranslator/runtime/cocos2d-js/opengametranslator_hook.dll"
+        ];
+
+        for (var dpi = 0; dpi < dllPaths.length; dpi += 1) {
+            var dllPath = dllPaths[dpi];
+
+            // Method 1: __jsc__.loadLibrary (SpiderMonkey extension)
+            try {
+                if (typeof __jsc__ !== "undefined" && __jsc__ && typeof __jsc__.loadLibrary === "function") {
+                    __jsc__.loadLibrary(dllPath);
+                    state.notes.push("Hook DLL loaded via __jsc__.loadLibrary: " + dllPath);
+                    return true;
+                }
+            } catch (e1) {
+                state.notes.push("__jsc__.loadLibrary failed: " + e1);
+            }
+
+            // Method 2: ctypes (SpiderMonkey FFI, if available)
+            try {
+                if (typeof ctypes !== "undefined" && ctypes) {
+                    var lib = ctypes.open(dllPath);
+                    if (lib) {
+                        state.notes.push("Hook DLL loaded via ctypes.open: " + dllPath);
+                        lib.close();
+                        return true;
+                    }
+                }
+            } catch (e2) {
+                state.notes.push("ctypes.open failed: " + e2);
+            }
+
+            // Method 3: try to use require with full path
+            try {
+                require(dllPath);
+                state.notes.push("Hook DLL loaded via require: " + dllPath);
+                return true;
+            } catch (e3) {
+                state.notes.push("require DLL failed: " + e3);
+            }
+
+            // Method 4: use eval with a native call
+            try {
+                if (typeof jsb !== "undefined" && jsb && jsb.reflection && typeof jsb.reflection.callStaticMethod === "function") {
+                    jsb.reflection.callStaticMethod("java/lang/System", "loadLibrary", "(Ljava/lang/String;)V", dllPath);
+                    state.notes.push("Hook DLL loaded via jsb.reflection: " + dllPath);
+                    return true;
+                }
+            } catch (e4) {
+                state.notes.push("jsb.reflection failed: " + e4);
+            }
+        }
+
+        state.notes.push("All DLL load methods failed.");
+        return false;
+    }
+
+    // Dump module info to help locate AGTK function addresses.
+    function dumpModuleInfo() {
+        var fileUtils = getFileUtils();
+        if (!fileUtils) return;
+
+        tryLoadHookDll();
+
+        // Write the environment info for diagnostics.
+        try {
+            var infoText = JSON.stringify({
+                hasJsc: typeof __jsc__ !== "undefined",
+                hasCtypes: typeof ctypes !== "undefined",
+                hasJsReflection: !!(typeof jsb !== "undefined" && jsb && jsb.reflection),
+                globalKeys: Object.keys(GLOBAL).filter(function(k) {
+                    return typeof GLOBAL[k] !== "function" && typeof GLOBAL[k] !== "object";
+                }).slice(0, 30),
+            }, null, 2);
+
+            if (fileUtils.writeStringToFile) {
+                fileUtils.createDirectory && fileUtils.createDirectory("OpenGameTranslator/output");
+                fileUtils.writeStringToFile(infoText, "OpenGameTranslator/output/opengametranslator-module-info.json");
+            }
+        } catch (e2) {
+            state.notes.push("Failed to write module info: " + e2);
+        }
+    }
+
     try {
         log("installing runtime probe");
         exposeDebugApi();
         collectEnvironment();
         installJsonParseProbe();
         installFileReadProbe();
+        installConsoleHook();
         probeKnownFiles();
         installTextHookAfterEngineLoaded();
+        installConstructorHooks();
+        scheduleGlobalObjectScan();
         flushProbeData("startup");
         log("runtime probe installed");
     } catch (error) {

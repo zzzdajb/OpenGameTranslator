@@ -98,4 +98,31 @@
 - [ ] 在游戏运行时观察 `setString()` hook 是否能捕获到显示文本（当前 `displayedTexts: 0`）
 - [ ] 研究 AGTK 引擎的文本显示流水线（是否通过 `Agtk.plugins` 或其他 JS API 暴露文本）
 - [ ] 考虑 C++ 层面的 DLL 注入方案（复杂度高）
-- [ ] 评估：对 AGTK 类游戏，当前“替换静态文件中的字符串”方案能达到的覆盖率是否足够（窗口标题、UI 标签等）
+- [ ] 评估：对 AGTK 类游戏，当前”替换静态文件中的字符串”方案能达到的覆盖率是否足够（窗口标题、UI 标签等）
+
+## 8. C++ Hook 探索（2026-05-17）
+
+### 8.1 MTool AgtkHook.dll 逆向发现
+- `AgtkHook.dll`（MTool 的 AGTK 专用 hook）使用 MinHook 库
+- 目标函数：`agtk::TextGui::updateText(std::string,...)` — 按值传参
+- 其他 hook 点：`agtk::data::TextData::getText(char const*)`, `cocos2d::Texture2D::initWithString`
+
+### 8.2 函数签名（从 mangled name 解码）
+- `updateText`：`void TextGui::updateText(string, int, int, float, float, int, int)`
+- `updateTextRender`：类似签名
+- 函数在 player.exe 中（32-bit PE），不导出，需通过 RTTI 定位
+
+### 8.3 RTTI 信息
+- TypeDescriptor `.?AVTextGui@agtk@@` 在文件偏移 0x7C826C
+- VTable 符号 `??_7TextGui@agtk@@6B@` 在文件偏移 0x690863
+- ImageBase: 0x4D2000（PE32 x86）
+
+### 8.4 构建环境
+- MSVC BuildTools 2022 + Windows SDK 10.0.26100.0 可用
+- x86 诊断 DLL 编译成功（`tools/hook_dll/opengametranslator_hook.dll`）
+- Python 注入器遇到 WoW64 兼容性问题（`CreateToolhelp32Snapshot` 挂起）
+
+### 8.5 待解决
+- [ ] 可靠的 32-bit DLL 注入方式（Process Hacker / Cheat Engine / 修复注入器）
+- [ ] 运行时 RTTI 扫描确认能定位函数
+- [ ] 实现 `updateText` hook 和文本替换

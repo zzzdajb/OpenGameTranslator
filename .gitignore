@@ -34,3 +34,6 @@ samples/
 *.asar
 *.asar.unpacked/
 .stversions/
+tools/hook_dll/*.exe
+tools/hook_dll/*.dll
+tools/hook_dll/*.obj
