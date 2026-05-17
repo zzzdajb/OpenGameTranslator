@@ -77,7 +77,7 @@
             return false;
         }
 
-        if (!/[\u3040-\u30ff\u3400-\u9fff\uff01-\uff60]/.test(text)) {
+        if (!/[぀-ヿ㐀-鿿！-｠]/.test(text)) {
             return false;
         }
 
