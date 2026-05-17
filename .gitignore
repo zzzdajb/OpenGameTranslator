@@ -24,6 +24,7 @@ pnpm-debug.log*
 .vscode/
 .DS_Store
 Thumbs.db
+.stfolder/
 
 # Local game samples and extracted content
 games/*
@@ -32,3 +33,4 @@ samples/
 游戏逆向报告/
 *.asar
 *.asar.unpacked/
+.stversions/

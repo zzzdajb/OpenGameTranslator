@@ -12,6 +12,9 @@ import { TranslationCsvValidator } from "../core/TranslationCsvValidator.js";
 import { TranslationCsvWriter } from "../core/TranslationCsvWriter.js";
 import { TranslationPackageBuilder } from "../core/TranslationPackageBuilder.js";
 import { TranslationPackageWriter } from "../core/TranslationPackageWriter.js";
+import { Cocos2dJsManagedInstaller } from "../engines/cocos2d-js/Cocos2dJsManagedInstaller.js";
+import { Cocos2dJsProbeInstaller } from "../engines/cocos2d-js/Cocos2dJsProbeInstaller.js";
+import { Cocos2dJsRuntimeExportReader } from "../engines/cocos2d-js/Cocos2dJsRuntimeExportReader.js";
 import { TyranoScriptManagedInstaller } from "../engines/tyrano/TyranoScriptManagedInstaller.js";
 
 interface DetectedEngine {
@@ -52,6 +55,10 @@ class CliApplication {
             return await this.runExtract(args);
         }
 
+        if (commandName === "cocos-export-csv") {
+            return await this.runCocosExportCsv(args);
+        }
+
         if (commandName === "validate") {
             return await this.runValidate(args);
         }
@@ -68,12 +75,36 @@ class CliApplication {
             return await this.runInstall(args);
         }
 
+        if (commandName === "install-cocos") {
+            return await this.runInstallCocos(args);
+        }
+
+        if (commandName === "install-probe") {
+            return await this.runInstallProbe(args);
+        }
+
         if (commandName === "uninstall") {
             return await this.runUninstall(args);
         }
 
+        if (commandName === "uninstall-cocos") {
+            return await this.runUninstallCocos(args);
+        }
+
+        if (commandName === "uninstall-probe") {
+            return await this.runUninstallProbe(args);
+        }
+
         if (commandName === "verify-install") {
             return await this.runVerifyInstall(args);
+        }
+
+        if (commandName === "verify-cocos") {
+            return await this.runVerifyCocos(args);
+        }
+
+        if (commandName === "verify-probe") {
+            return await this.runVerifyProbe(args);
         }
 
         this.logger.error(`Unknown command: ${commandName}`);
@@ -291,6 +322,126 @@ class CliApplication {
         return 0;
     }
 
+    private async runInstallCocos(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+        const translationPackagePath: string | undefined = args[2];
+        const gameExecutableName: string | null = args[3] ?? null;
+
+        if (gamePath === undefined || translationPackagePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator install-cocos <game-path> <translation-package> [game-exe-name]");
+            return 1;
+        }
+
+        const installer: Cocos2dJsManagedInstaller = new Cocos2dJsManagedInstaller();
+        const installResult = await installer.install({
+            gamePath: gamePath,
+            translationPackagePath: translationPackagePath,
+            gameExecutableName: gameExecutableName
+        });
+
+        if (!installResult.isSuccess) {
+            this.logger.error(installResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info("Install mode: Cocos2d-JS runtime translation");
+        this.logger.info(`Game root: ${installResult.value.gameRootPath}`);
+        this.logger.info(`Resources: ${installResult.value.resourcesPath}`);
+        this.logger.info(`Workdir: ${installResult.value.workdirPath}`);
+        this.logger.info(`Manifest: ${installResult.value.manifestPath}`);
+        this.logger.info(`Runtime: ${installResult.value.runtimePath}`);
+        this.logger.info(`Package: ${installResult.value.packagePath}`);
+        this.logger.info(`Patched file: ${installResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${installResult.value.backupFilePath}`);
+        this.logger.info(`Expected runtime status: ${installResult.value.expectedRuntimeStatusPath}`);
+        this.logger.info(`Game executable: ${installResult.value.gameExecutableName}`);
+        this.logger.info(`Run script: ${installResult.value.runBatPath}`);
+        this.logger.info(`Restore script: ${installResult.value.restoreBatPath}`);
+
+        return 0;
+    }
+
+    private async runUninstallCocos(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator uninstall-cocos <game-path>");
+            return 1;
+        }
+
+        const installer: Cocos2dJsManagedInstaller = new Cocos2dJsManagedInstaller();
+        const uninstallResult = await installer.uninstall(gamePath);
+
+        if (!uninstallResult.isSuccess) {
+            this.logger.error(uninstallResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Restored file: ${uninstallResult.value.restoredFilePath}`);
+        this.logger.info(`Backup file: ${uninstallResult.value.backupFilePath}`);
+
+        return 0;
+    }
+
+    private async runInstallProbe(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+        const gameExecutableName: string | null = args[2] ?? null;
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator install-probe <game-path> [game-exe-name]");
+            return 1;
+        }
+
+        const installer: Cocos2dJsProbeInstaller = new Cocos2dJsProbeInstaller();
+        const installResult = await installer.install({
+            gamePath: gamePath,
+            gameExecutableName: gameExecutableName
+        });
+
+        if (!installResult.isSuccess) {
+            this.logger.error(installResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info("Probe mode: Cocos2d-JS runtime resource probe");
+        this.logger.info(`Game root: ${installResult.value.gameRootPath}`);
+        this.logger.info(`Resources: ${installResult.value.resourcesPath}`);
+        this.logger.info(`Workdir: ${installResult.value.workdirPath}`);
+        this.logger.info(`Manifest: ${installResult.value.manifestPath}`);
+        this.logger.info(`Runtime: ${installResult.value.runtimePath}`);
+        this.logger.info(`Patched file: ${installResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${installResult.value.backupFilePath}`);
+        this.logger.info(`Expected loader output: ${installResult.value.expectedLoaderOutputPath}`);
+        this.logger.info(`Expected extracted output: ${installResult.value.expectedProbeOutputPath}`);
+        this.logger.info(`Game executable: ${installResult.value.gameExecutableName}`);
+        this.logger.info(`Run script: ${installResult.value.runBatPath}`);
+        this.logger.info(`Restore script: ${installResult.value.restoreBatPath}`);
+
+        return 0;
+    }
+
+    private async runUninstallProbe(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator uninstall-probe <game-path>");
+            return 1;
+        }
+
+        const installer: Cocos2dJsProbeInstaller = new Cocos2dJsProbeInstaller();
+        const uninstallResult = await installer.uninstall(gamePath);
+
+        if (!uninstallResult.isSuccess) {
+            this.logger.error(uninstallResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Restored file: ${uninstallResult.value.restoredFilePath}`);
+        this.logger.info(`Backup file: ${uninstallResult.value.backupFilePath}`);
+
+        return 0;
+    }
+
     private async runVerifyInstall(args: readonly string[]): Promise<number> {
         const gamePath: string | undefined = args[1];
 
@@ -310,6 +461,61 @@ class CliApplication {
         this.logger.info(`Manifest: ${verifyResult.value.manifestPath}`);
         this.logger.info(`Patched file: ${verifyResult.value.patchedFilePath}`);
         this.logger.info(`Backup file: ${verifyResult.value.backupFilePath}`);
+        this.logger.info(`Current SHA-256: ${verifyResult.value.currentSha256}`);
+        this.logger.info(`Expected SHA-256: ${verifyResult.value.expectedPatchedSha256}`);
+        this.logger.info(`Status: ${verifyResult.value.isInstalled ? "Installed" : "Changed"}`);
+
+        return verifyResult.value.isInstalled ? 0 : 1;
+    }
+
+    private async runVerifyCocos(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator verify-cocos <game-path>");
+            return 1;
+        }
+
+        const installer: Cocos2dJsManagedInstaller = new Cocos2dJsManagedInstaller();
+        const verifyResult = await installer.verify(gamePath);
+
+        if (!verifyResult.isSuccess) {
+            this.logger.error(verifyResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Manifest: ${verifyResult.value.manifestPath}`);
+        this.logger.info(`Patched file: ${verifyResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${verifyResult.value.backupFilePath}`);
+        this.logger.info(`Expected runtime status: ${verifyResult.value.expectedRuntimeStatusPath}`);
+        this.logger.info(`Current SHA-256: ${verifyResult.value.currentSha256}`);
+        this.logger.info(`Expected SHA-256: ${verifyResult.value.expectedPatchedSha256}`);
+        this.logger.info(`Status: ${verifyResult.value.isInstalled ? "Installed" : "Changed"}`);
+
+        return verifyResult.value.isInstalled ? 0 : 1;
+    }
+
+    private async runVerifyProbe(args: readonly string[]): Promise<number> {
+        const gamePath: string | undefined = args[1];
+
+        if (gamePath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator verify-probe <game-path>");
+            return 1;
+        }
+
+        const installer: Cocos2dJsProbeInstaller = new Cocos2dJsProbeInstaller();
+        const verifyResult = await installer.verify(gamePath);
+
+        if (!verifyResult.isSuccess) {
+            this.logger.error(verifyResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Manifest: ${verifyResult.value.manifestPath}`);
+        this.logger.info(`Patched file: ${verifyResult.value.patchedFilePath}`);
+        this.logger.info(`Backup file: ${verifyResult.value.backupFilePath}`);
+        this.logger.info(`Expected loader output: ${verifyResult.value.expectedLoaderOutputPath}`);
+        this.logger.info(`Expected extracted output: ${verifyResult.value.expectedProbeOutputPath}`);
         this.logger.info(`Current SHA-256: ${verifyResult.value.currentSha256}`);
         this.logger.info(`Expected SHA-256: ${verifyResult.value.expectedPatchedSha256}`);
         this.logger.info(`Status: ${verifyResult.value.isInstalled ? "Installed" : "Changed"}`);
@@ -350,6 +556,39 @@ class CliApplication {
 
         this.logger.info(`Engine: ${detectedEngine.result.engineName} (${detectedEngine.result.engineId})`);
         this.logger.info(`Extracted entries: ${writeResult.value.totalEntryCount}`);
+        this.logger.info(`Unique CSV rows: ${writeResult.value.uniqueSourceCount}`);
+        this.logger.info(`Output CSV: ${writeResult.value.outputPath}`);
+
+        return 0;
+    }
+
+    private async runCocosExportCsv(args: readonly string[]): Promise<number> {
+        const runtimeExportPath: string | undefined = args[1];
+        const outputPath: string | undefined = args[2];
+
+        if (runtimeExportPath === undefined || outputPath === undefined) {
+            this.logger.error("Missing argument. Usage: opengametranslator cocos-export-csv <runtime-export-json> <output-csv>");
+            return 1;
+        }
+
+        const reader: Cocos2dJsRuntimeExportReader = new Cocos2dJsRuntimeExportReader();
+        const readResult = await reader.read(runtimeExportPath);
+
+        if (!readResult.isSuccess) {
+            this.logger.error(readResult.errorMessage);
+            return 1;
+        }
+
+        const writer: TranslationCsvWriter = new TranslationCsvWriter();
+        const writeResult = await writer.write(outputPath, readResult.value.entries);
+
+        if (!writeResult.isSuccess) {
+            this.logger.error(writeResult.errorMessage);
+            return 1;
+        }
+
+        this.logger.info(`Runtime export: ${readResult.value.inputPath}`);
+        this.logger.info(`Raw text items: ${readResult.value.rawTextCount}`);
         this.logger.info(`Unique CSV rows: ${writeResult.value.uniqueSourceCount}`);
         this.logger.info(`Output CSV: ${writeResult.value.outputPath}`);
 
@@ -416,22 +655,36 @@ class CliApplication {
         this.logger.info("Usage:");
         this.logger.info("  opengametranslator detect <game-path>");
         this.logger.info("  opengametranslator extract <game-path> <output-csv>");
+        this.logger.info("  opengametranslator cocos-export-csv <runtime-export-json> <output-csv>");
         this.logger.info("  opengametranslator validate <translation-csv>");
         this.logger.info("  opengametranslator repair <original-csv> <translated-tool-csv> <output-csv>");
         this.logger.info("  opengametranslator build <translation-csv> <output-json>");
         this.logger.info("  opengametranslator install <game-path> <translation-package> [game-exe-name]");
+        this.logger.info("  opengametranslator install-cocos <game-path> <translation-package> [game-exe-name]");
+        this.logger.info("  opengametranslator install-probe <game-path> [game-exe-name]");
         this.logger.info("  opengametranslator verify-install <game-path>");
+        this.logger.info("  opengametranslator verify-cocos <game-path>");
+        this.logger.info("  opengametranslator verify-probe <game-path>");
         this.logger.info("  opengametranslator uninstall <game-path>");
+        this.logger.info("  opengametranslator uninstall-cocos <game-path>");
+        this.logger.info("  opengametranslator uninstall-probe <game-path>");
         this.logger.info("");
         this.logger.info("Commands:");
         this.logger.info("  detect    Detect the game engine from a local game directory.");
         this.logger.info("  extract   Extract translatable text to a two-column CSV.");
+        this.logger.info("  cocos-export-csv  Convert a Cocos2d-JS runtime export JSON to a two-column CSV.");
         this.logger.info("  validate  Validate a two-column translation CSV.");
         this.logger.info("  repair    Restore a two-column CSV when a tool overwrote the source column.");
         this.logger.info("  build     Build a runtime translation package from CSV.");
         this.logger.info("  install   Create a managed TyranoScript patch, workdir, and launch scripts.");
+        this.logger.info("  install-cocos  Create a managed Cocos2d-JS translation patch.");
+        this.logger.info("  install-probe  Create a managed Cocos2d-JS runtime probe patch.");
         this.logger.info("  verify-install  Verify the managed patch recorded in the manifest.");
+        this.logger.info("  verify-cocos  Verify the managed Cocos2d-JS translation patch.");
+        this.logger.info("  verify-probe  Verify the managed Cocos2d-JS probe patch.");
         this.logger.info("  uninstall Restore the original file from the managed backup.");
+        this.logger.info("  uninstall-cocos Restore the original file from the Cocos2d-JS translation backup.");
+        this.logger.info("  uninstall-probe Restore the original file from the Cocos2d-JS probe backup.");
     }
 }
 
