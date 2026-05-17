@@ -1267,31 +1267,32 @@ static __declspec(naked) void DetourSqlite3Open(void) {
 
 /*
  * TextGui::getString: thiscall, returns std::string by value (hidden ptr at [esp+4]).
- * Uses CALL-based detour to capture the result string after the call returns.
+ * CALL-based detour: captures the result string AFTER getString constructs it.
  */
 static __declspec(naked) void DetourTextGuiGetString(void) {
     __asm {
         pushfd
         pushad
-        /* Log that getString was called. */
-        push dword ptr [esp + 40]  /* hidden return string ptr */
+        push dword ptr [esp + 40]  /* hidden return string ptr (uninit before call) */
         push OFFSET g_labelTextGuiGetString
-        call LogTextCall
+        call LogCStringCall
         add esp, 8
         popad
         popfd
         /* Call original via trampoline. */
         call dword ptr [g_textGuiGetStringTrampoline]
-        /* eax = hidden return pointer (same as [esp+4] in original).
-           The result std::string has been constructed there. Read it. */
-        pushfd
-        pushad
-        push eax
+        /* eax = hidden return pointer. The result std::string has been constructed.
+           Read it via LogStdStringRefCall. */
+        push eax              /* [esp+0] = hidden_ptr */
+        pushfd                /* [esp+0]=eflags, [esp+4]=hidden_ptr */
+        pushad                /* [esp+0..27]=regs, [esp+28]=EAX, [esp+32]=eflags, [esp+36]=hidden_ptr */
+        push dword ptr [esp + 36]  /* hidden_ptr — the constructed result std::string */
         push OFFSET g_labelTextGuiGetStringResult
         call LogStdStringRefCall
         add esp, 8
         popad
         popfd
+        pop eax               /* restore eax */
         ret
     }
 }
