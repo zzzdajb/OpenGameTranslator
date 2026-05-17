@@ -107,6 +107,9 @@ static void *g_execActionMessageShowTrampoline = NULL;
 static void *g_sqlite3ColumnTextTrampoline = NULL;
 static void *g_sqlite3ColumnText16Trampoline = NULL;
 static void *g_sqlite3ExecTrampoline = NULL;
+static void *g_sqlite3PrepareV2Trampoline = NULL;
+static void *g_sqlite3StepTrampoline = NULL;
+static void *g_sqlite3OpenTrampoline = NULL;
 static void *g_textGuiGetStringTrampoline = NULL;
 static LONG g_textDataGetTextCallCount = 0;
 static LONG g_cStringCallCount = 0;
@@ -136,6 +139,9 @@ static const char g_labelSqlite3ColumnText[] = "sqlite3_column_text";
 static const char g_labelSqlite3ColumnTextResult[] = "sqlite3_column_text-result";
 static const char g_labelSqlite3ColumnText16[] = "sqlite3_column_text16";
 static const char g_labelSqlite3Exec[] = "sqlite3_exec";
+static const char g_labelSqlite3PrepareV2[] = "sqlite3_prepare_v2";
+static const char g_labelSqlite3Step[] = "sqlite3_step";
+static const char g_labelSqlite3Open[] = "sqlite3_open";
 static const char g_labelTextGuiGetString[] = "TextGui::getString";
 static const char g_labelTextGuiGetStringResult[] = "TextGui::getString-result";
 
@@ -162,6 +168,9 @@ static void DetourExecActionMessageShow(void);
 static void DetourSqlite3ColumnText(void);
 static void DetourSqlite3ColumnText16(void);
 static void DetourSqlite3Exec(void);
+static void DetourSqlite3PrepareV2(void);
+static void DetourSqlite3Step(void);
+static void DetourSqlite3Open(void);
 static void DetourTextGuiGetString(void);
 
 static int CopyCStringPreview(const char *value, char *output, DWORD outputSize) {
@@ -809,12 +818,33 @@ static void InstallExportHooks(void) {
                 "sqlite3_exec",
                 DetourSqlite3Exec,
                 NULL, NULL, {0}, 0, 0
+            },
+            {
+                "sqlite3_prepare_v2",
+                "sqlite3_prepare_v2",
+                DetourSqlite3PrepareV2,
+                NULL, NULL, {0}, 0, 0
+            },
+            {
+                "sqlite3_step",
+                "sqlite3_step",
+                DetourSqlite3Step,
+                NULL, NULL, {0}, 0, 0
+            },
+            {
+                "sqlite3_open",
+                "sqlite3_open",
+                DetourSqlite3Open,
+                NULL, NULL, {0}, 0, 0
             }
         };
         void **sqlite3TrampolineSlots[] = {
             &g_sqlite3ColumnTextTrampoline,
             &g_sqlite3ColumnText16Trampoline,
-            &g_sqlite3ExecTrampoline
+            &g_sqlite3ExecTrampoline,
+            &g_sqlite3PrepareV2Trampoline,
+            &g_sqlite3StepTrampoline,
+            &g_sqlite3OpenTrampoline
         };
         InstallHooksForModule(sqlite3Module, "sqlite3.dll", sqlite3Hooks, sqlite3TrampolineSlots,
                               (int)(sizeof(sqlite3Hooks) / sizeof(sqlite3Hooks[0])));
@@ -1183,6 +1213,55 @@ static __declspec(naked) void DetourSqlite3Exec(void) {
         popad
         popfd
         jmp dword ptr [g_sqlite3ExecTrampoline]
+    }
+}
+
+/* sqlite3_prepare_v2: cdecl, int sqlite3_prepare_v2(sqlite3*, const char *sql, int, sqlite3_stmt**, const char **).
+   Log the SQL text being compiled. */
+static __declspec(naked) void DetourSqlite3PrepareV2(void) {
+    __asm {
+        pushfd
+        pushad
+        mov eax, [esp + 44]  /* SQL text (second cdecl param) */
+        push eax
+        push OFFSET g_labelSqlite3PrepareV2
+        call LogCStringCall
+        add esp, 8
+        popad
+        popfd
+        jmp dword ptr [g_sqlite3PrepareV2Trampoline]
+    }
+}
+
+/* sqlite3_step: cdecl, int sqlite3_step(sqlite3_stmt*). Log that a row is being fetched. */
+static __declspec(naked) void DetourSqlite3Step(void) {
+    __asm {
+        pushfd
+        pushad
+        push dword ptr [esp + 40]  /* stmt pointer */
+        push OFFSET g_labelSqlite3Step
+        call LogCStringCall
+        add esp, 8
+        popad
+        popfd
+        jmp dword ptr [g_sqlite3StepTrampoline]
+    }
+}
+
+/* sqlite3_open: cdecl, int sqlite3_open(const char *filename, sqlite3**).
+   Log the database filename. */
+static __declspec(naked) void DetourSqlite3Open(void) {
+    __asm {
+        pushfd
+        pushad
+        mov eax, [esp + 40]  /* filename (first cdecl param) */
+        push eax
+        push OFFSET g_labelSqlite3Open
+        call LogCStringCall
+        add esp, 8
+        popad
+        popfd
+        jmp dword ptr [g_sqlite3OpenTrampoline]
     }
 }
 
