@@ -80,4 +80,63 @@ launcher.exe "C:\York\Works\Programming\OpenGameTranslator\games\maya\player.exe
 - `cocos2d::ui::Text::setString/setText`
 - `cocos2d::ui::TextBMFont::setString/setText`
 
+新版还新增了文件 I/O hook：
+
+- `CreateFileW` — 记录游戏通过 Windows API 打开的所有文件路径
+- `CreateFileA` — 同上（ANSI 版本）
+- `fopen` / `fopen_s` / `fread` — 通过修改 `player.exe` 和 `libcocos2d.dll` 的导入表记录 CRT stdio 读文件路径和读取量
+
+同时新增 SpiderMonkey 字符串创建 hook：
+
+- `JS_NewStringCopyN`
+- `JS_NewStringCopyZ`
+- `JS_NewUCStringCopyN`
+- `JS_NewUCStringCopyZ`
+- `JS_NewUCString`
+- `JS_InternString`
+- `JS_InternStringN`
+- `JS_InternUCString`
+- `JS_InternUCStringN`
+- `JS_ParseJSON` raw wchar_t 重载
+
+新增 AGTK 消息 UI / 数据 setter 诊断 hook：
+
+- `ActionCommandMessageTextUi::update`
+- `ActionCommandScrollMessageTextUi::update`
+- `ActionCommandMessageTextUi::setTextGui`
+- `ActionCommandScrollMessageTextUi::setTextGui`
+- `ObjectAction::execActionScrollMessageShow`
+- `GuiManager::addActionCommandMessageGui` 两个重载
+- `GuiManager::addActionCommandScrollMessageGui` 两个重载
+- `ActionCommandMessageTextUi::create`
+- `ActionCommandScrollMessageTextUi::create`
+- `ActionCommandMessageTextUi::init`
+- `ActionCommandScrollMessageTextUi::init`
+- `ActionCommandMessageTextUi::setData`
+- `ActionCommandScrollMessageTextUi::setData`
+- `ActionCommandMessageTextUi::getData`
+- `ActionCommandScrollMessageTextUi::getData`
+- `MessageWindowNode::create` 普通 message / scroll message 两个重载
+- `MessageWindowNode::init` 普通 message / scroll message 两个重载
+- `ObjectCommandMessageShowData::getTextFlag`
+- `ObjectCommandMessageShowData::getTextId`
+- `ObjectCommandMessageShowData::getVariableId`
+- `ObjectCommandMessageShowData::getVariableObjectId`
+- `ObjectCommandMessageShowData::getVariableQualifierId`
+- `ObjectCommandScrollMessageShowData::getTextId`
+- `ObjectCommandMessageShowData::setTextId`
+- `ObjectCommandMessageShowData::setTextFlag`
+- `ObjectCommandMessageShowData::setVariableId`
+- `ObjectCommandMessageShowData::setVariableObjectId`
+- `ObjectCommandMessageShowData::setVariableQualifierId`
+- `ObjectCommandScrollMessageShowData::setTextId`
+
+`ObjectAction::execActionMessageShow` 现在不再把 `ObjectCommandData*` 当作 C 字符串读取，而是输出 `[ObjectCommandProbe:N]` 结构体探针日志：先 dump 前 0x80 字节，再尝试识别内联 `std::string`、直接指针字符串和一层嵌套指针字符串。
+
+日志中以 `[FileHook:N]` 开头的行为文件路径记录。用于确认 AGTK 引擎是否通过 Cocos2d `fileUtils` 之外的路径读取对话数据文件。
+
+日志中以 `[CRTFile:N]` / `[CRTRead:N]` 开头的行为 CRT 文件 I/O 记录；以 `[JSString:N/M]` 开头的行为 SpiderMonkey 字符串创建记录；以 `[ObjectCommandProbe:N]` 开头的行为 `execActionMessageShow` / `execActionScrollMessageShow` 参数结构体记录；以 `[MessageUiLink:N]` 开头的行为 AGTK 消息 UI 与 `TextGui` 的绑定记录；以 `[MessageUiUpdate:N/M]` 开头的行为 AGTK 消息 UI update 抽样记录；以 `[MessageFlow:N/M]` 开头的行为已确认的 `ObjectCommandMessageShowData` / `ObjectCommandScrollMessageShowData` 记录；以 `[MessageFlowOther:N/M]` 开头的行为未匹配 message data vtable 的噪声样本；以 `[ValueHook:N]` 开头的行为 messageShow 数据 setter 记录；以 `[ValueGet:N]` 开头的行为 messageShow 数据 getter 使用记录。
+
+启动日志会输出 `Resolved message data vtables: message=... scroll=...`。setter 第一次触发时还会输出 `[ValueHook] learned ... vtable from setter`，因为 PE 导出的 vtable 地址和对象首 DWORD 可能不完全一致。`MessageFlow` 会用导出 vtable 和 setter 学到的 vtable 一起判断对象类型，再输出 `textId` / `variableId` 等字段；heartbeat 里的 `MessageFlow=seen/logged Data=confirmed Other=otherSeen` 用来判断是否真的抓到了 message data。
+
 如果日志里出现 `[TextHook:...]`、`[TextData:...]`、`[CStringHook:...]` 或 `[StringHook:...]` 行，说明已经截获到 AGTK/Cocos 传给文本显示/查表函数的字符串。下一步才会设计真正的翻译替换逻辑。

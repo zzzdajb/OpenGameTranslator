@@ -178,6 +178,312 @@
         return result;
     }
 
+    function recordMessageVariableId(messageShow, path) {
+        if (!messageShow || typeof messageShow.variableId !== "number") {
+            return;
+        }
+
+        var variableId = String(messageShow.variableId);
+        if (!structuralData.messageVariableIds[variableId]) {
+            structuralData.messageVariableIds[variableId] = {
+                variableId: messageShow.variableId,
+                count: 0,
+                paths: []
+            };
+        }
+
+        structuralData.messageVariableIds[variableId].count += 1;
+        if (structuralData.messageVariableIds[variableId].paths.length < 30) {
+            structuralData.messageVariableIds[variableId].paths.push(path);
+        }
+    }
+
+    function recordVariableDefinition(obj, basePath) {
+        if (structuralData.variableDefinitions.length >= 10000) {
+            return;
+        }
+
+        structuralData.variableDefinitions.push({
+            path: basePath,
+            id: typeof obj.id === "number" ? obj.id : null,
+            name: typeof obj.name === "string" ? obj.name : "",
+            memo: typeof obj.memo === "string" ? limitText(obj.memo, 300) : "",
+            initialValue: primitiveValue(obj.initialValue),
+            toBeSaved: typeof obj.toBeSaved === "boolean" ? obj.toBeSaved : null,
+            folder: typeof obj.folder === "boolean" ? obj.folder : null
+        });
+    }
+
+    function recordSwitchVariableChange(obj, basePath) {
+        if (!obj || typeof obj.switchVariableChange !== "object" || obj.switchVariableChange === null) {
+            return;
+        }
+
+        if (structuralData.switchVariableChanges.length >= 20000) {
+            return;
+        }
+
+        var change = obj.switchVariableChange;
+        structuralData.switchVariableChanges.push({
+            path: basePath + ".switchVariableChange",
+            commandType: primitiveValue(obj.commandType),
+            variableId: primitiveValue(change.variableId),
+            variableObjectId: primitiveValue(change.variableObjectId),
+            variableQualifierId: primitiveValue(change.variableQualifierId),
+            variableAssignOperator: primitiveValue(change.variableAssignOperator),
+            variableAssignValueType: primitiveValue(change.variableAssignValueType),
+            assignValue: primitiveValue(change.assignValue),
+            assignVariableId: primitiveValue(change.assignVariableId),
+            assignVariableObjectId: primitiveValue(change.assignVariableObjectId),
+            assignVariableQualifierId: primitiveValue(change.assignVariableQualifierId),
+            javaScript: typeof change.javaScript === "string" ? limitText(change.javaScript, 1000) : "",
+            assignScript: typeof change.assignScript === "string" ? limitText(change.assignScript, 1000) : "",
+            keys: Object.keys(change).slice(0, 40)
+        });
+    }
+
+    function refreshMessageVariableLinks() {
+        var ids = structuralData.messageVariableIds || {};
+        var definitions = [];
+        var assignments = [];
+        var i;
+        var item;
+
+        for (i = 0; i < structuralData.variableDefinitions.length; i += 1) {
+            item = structuralData.variableDefinitions[i];
+            if (item.id !== null && ids[String(item.id)]) {
+                definitions.push(item);
+            }
+        }
+
+        for (i = 0; i < structuralData.switchVariableChanges.length; i += 1) {
+            item = structuralData.switchVariableChanges[i];
+            if (item.variableId !== null && ids[String(item.variableId)]) {
+                assignments.push(item);
+            }
+        }
+
+        structuralData.messageVariableDefinitions = definitions;
+        structuralData.messageVariableAssignments = assignments;
+    }
+
+    function primitiveValue(value) {
+        if (value === null || typeof value === "undefined") {
+            return null;
+        }
+
+        if (typeof value === "string") {
+            return limitText(value, 300);
+        }
+
+        if (typeof value === "number" || typeof value === "boolean") {
+            return value;
+        }
+
+        return "[object]";
+    }
+
+    function limitText(text, maxLength) {
+        if (text.length <= maxLength) {
+            return text;
+        }
+
+        return text.slice(0, maxLength) + "...";
+    }
+
+    function collectActionGroups(parsed) {
+        structuralData.actionGroups = [];
+        scanActionGroupCandidates(parsed, "", 0);
+    }
+
+    function scanActionGroupCandidates(value, basePath, depth) {
+        if (!value || typeof value !== "object" || depth > 30) return;
+
+        if (Object.prototype.toString.call(value) === "[object Array]") {
+            for (var i = 0; i < Math.min(value.length, 5000); i += 1) {
+                scanActionGroupCandidates(value[i], basePath + "[" + i + "]", depth + 1);
+            }
+            return;
+        }
+
+        try {
+            if (Object.prototype.toString.call(value.actionList) === "[object Array]") {
+                recordActionGroup(value, basePath);
+            }
+
+            var keys = Object.keys(value);
+            for (var ki = 0; ki < Math.min(keys.length, 1000); ki += 1) {
+                var key = keys[ki];
+                var child = value[key];
+                if (child !== null && typeof child === "object") {
+                    scanActionGroupCandidates(child, basePath ? basePath + "." + key : key, depth + 1);
+                }
+            }
+        } catch (e) {
+            structuralData.notes.push("scanActionGroupCandidates error at " + basePath + ": " + e);
+        }
+    }
+
+    function recordActionGroup(owner, basePath) {
+        if (structuralData.actionGroups.length >= 5000) {
+            return;
+        }
+
+        var actions = [];
+        var actionList = owner.actionList || [];
+        for (var ai = 0; ai < Math.min(actionList.length, 300); ai += 1) {
+            var action = actionList[ai];
+            if (!action || typeof action !== "object") continue;
+
+            actions.push(summarizeAction(action, ai));
+        }
+
+        if (actions.length === 0) {
+            return;
+        }
+
+        var textLikeCount = 0;
+        var displayRelatedCount = 0;
+        var commandTotal = 0;
+        for (var si = 0; si < actions.length; si += 1) {
+            if (isActionNameTextLike(actions[si].name)) textLikeCount += 1;
+            if (isActionNameDisplayRelated(actions[si].name)) displayRelatedCount += 1;
+            commandTotal += actions[si].commandCount;
+        }
+
+        structuralData.actionGroups.push({
+            path: basePath,
+            objectId: primitiveValue(owner.id),
+            objectName: typeof owner.name === "string" ? limitText(owner.name, 120) : "",
+            actionCount: actionList.length,
+            sampledActionCount: actions.length,
+            commandTotal: commandTotal,
+            textLikeActionNameCount: textLikeCount,
+            displayRelatedActionNameCount: displayRelatedCount,
+            actions: actions
+        });
+    }
+
+    function summarizeAction(action, actionIndex) {
+        var commandSummary = collectActionCommands(action);
+
+        return {
+            index: actionIndex,
+            id: primitiveValue(action.id),
+            name: typeof action.name === "string" ? limitText(action.name, 160) : "",
+            keys: Object.keys(action).slice(0, 30),
+            commandCount: commandSummary.commandCount,
+            commandTypeCounts: commandSummary.commandTypeCounts,
+            commandKinds: commandSummary.commandKinds,
+            messageVariableIds: commandSummary.messageVariableIds,
+            switchVariableIds: commandSummary.switchVariableIds,
+            scripts: commandSummary.scripts
+        };
+    }
+
+    function collectActionCommands(action) {
+        var summary = {
+            commandCount: 0,
+            commandTypeCounts: {},
+            commandKinds: {},
+            messageVariableIds: [],
+            switchVariableIds: [],
+            scripts: []
+        };
+
+        collectCommandsFromValue(action.objCommandList, summary, 0);
+        collectCommandsFromValue(action.commonActionCommandList, summary, 0);
+        collectCommandsFromValue(action.actionCommandListObject, summary, 0);
+
+        return summary;
+    }
+
+    function collectCommandsFromValue(value, summary, depth) {
+        if (!value || typeof value !== "object" || depth > 8 || summary.commandCount >= 200) {
+            return;
+        }
+
+        if (Object.prototype.toString.call(value) === "[object Array]") {
+            for (var i = 0; i < Math.min(value.length, 200); i += 1) {
+                collectCommandsFromValue(value[i], summary, depth + 1);
+            }
+            return;
+        }
+
+        try {
+            var keys = Object.keys(value);
+            var isCommand = false;
+            if (typeof value.commandType !== "undefined") {
+                isCommand = true;
+                incrementPlainObject(summary.commandTypeCounts, String(value.commandType));
+            }
+
+            for (var ki = 0; ki < keys.length; ki += 1) {
+                var key = keys[ki];
+                if (/messageShow|scrollMessageShow|switchVariableChange|objectCreate|objectDelete|objectAction|soundPlay|particleShow|imageShow|movieShow|scriptEvaluate|sceneTerminate|template|text/i.test(key)) {
+                    incrementPlainObject(summary.commandKinds, key);
+                    isCommand = true;
+                }
+            }
+
+            if (typeof value.messageShow === "object" && value.messageShow !== null) {
+                pushUniqueLimited(summary.messageVariableIds, value.messageShow.variableId, 30);
+            }
+
+            if (typeof value.switchVariableChange === "object" && value.switchVariableChange !== null) {
+                pushUniqueLimited(summary.switchVariableIds, value.switchVariableChange.variableId, 30);
+                if (typeof value.switchVariableChange.assignScript === "string" && value.switchVariableChange.assignScript.length > 0) {
+                    pushUniqueLimited(summary.scripts, limitText(value.switchVariableChange.assignScript, 120), 20);
+                }
+                if (typeof value.switchVariableChange.javaScript === "string" && value.switchVariableChange.javaScript.length > 0) {
+                    pushUniqueLimited(summary.scripts, limitText(value.switchVariableChange.javaScript, 120), 20);
+                }
+            }
+
+            if (isCommand) {
+                summary.commandCount += 1;
+            }
+
+            for (var kj = 0; kj < Math.min(keys.length, 120); kj += 1) {
+                var child = value[keys[kj]];
+                if (child !== null && typeof child === "object") {
+                    collectCommandsFromValue(child, summary, depth + 1);
+                }
+            }
+        } catch (e) {
+            // Command summaries are diagnostic only.
+        }
+    }
+
+    function incrementPlainObject(target, key) {
+        target[key] = (target[key] || 0) + 1;
+    }
+
+    function pushUniqueLimited(target, value, maxCount) {
+        if (value === null || typeof value === "undefined") {
+            return;
+        }
+
+        var text = String(value);
+        for (var i = 0; i < target.length; i += 1) {
+            if (String(target[i]) === text) {
+                return;
+            }
+        }
+
+        if (target.length < maxCount) {
+            target.push(value);
+        }
+    }
+
+    function isActionNameTextLike(name) {
+        return typeof name === "string" && /[ぁ-んァ-ヶ]/.test(name) && /[「」『』。、！？?？]/.test(name);
+    }
+
+    function isActionNameDisplayRelated(name) {
+        return typeof name === "string" && /テキスト|文字|字幕|会話|セリフ|台詞|吹き出し|表示|消す|出現|音声テキスト/.test(name);
+    }
+
     /* === Structural Analysis for project.json === */
     var structuralData = {
         projectKeys: [],
@@ -188,7 +494,15 @@
         textListEntries: [],
         objectsWithTextField: [],
         variableList: [],
+        variableDefinitions: [],
+        messageVariableIds: {},
+        switchVariableChanges: [],
+        messageVariableDefinitions: [],
+        messageVariableAssignments: [],
+        actionGroups: [],
         textIdToPath: {},
+        fontData: [],
+        glyphDecodeResults: [],
         notes: []
     };
 
@@ -217,6 +531,7 @@
 
             // Detect messageShow commands.
             if (typeof obj.messageShow === "object" && obj.messageShow !== null) {
+                recordMessageVariableId(obj.messageShow, basePath + ".messageShow");
                 structuralData.messageShows.push({
                     path: basePath + ".messageShow",
                     data: JSON.parse(JSON.stringify(obj.messageShow))
@@ -266,7 +581,12 @@
                         sample: JSON.parse(JSON.stringify(obj))
                     });
                 }
+
+                recordVariableDefinition(obj, basePath);
             }
+
+            // Variable text in AGTK often travels through switchVariableChange before messageShow displays it.
+            recordSwitchVariableChange(obj, basePath);
 
             // Collect any object with a "text" field (potential dialogue container).
             if (typeof obj.text === "string" && obj.text.length > 0) {
@@ -293,10 +613,182 @@
         }
     }
 
+    /* === Image-Font Glyph Index Scanner ===
+
+       For AGTK games with imageFontFlag=true, dialogue text may be stored as glyph
+       index arrays rather than as readable strings.  This scanner walks every array
+       in the parsed project.json, checks whether all elements are integers that fall
+       inside a font's letterLayout range, and tries to decode the sequence into
+       readable Japanese using the per-font letterLayout character map.
+    */
+    function extractFontData(parsed) {
+        var fonts = [];
+        var fontList = parsed && parsed.fontList;
+        if (!fontList || !Array.isArray(fontList)) {
+            structuralData.notes.push("fontList not found or not an array");
+            return fonts;
+        }
+
+        for (var fi = 0; fi < fontList.length; fi += 1) {
+            var f = fontList[fi];
+            if (!f || typeof f !== "object") continue;
+
+            var layout = (f.letterLayout || "").replace(/\r/g, "");
+            var jaSettings = (f.localeSettings && f.localeSettings.ja_JP) || {};
+            var jaLayout = (jaSettings.letterLayout || "").replace(/\r/g, "");
+
+            fonts.push({
+                id: typeof f.id === "number" ? f.id : fi,
+                name: typeof f.name === "string" ? f.name : "",
+                imageFontFlag: !!f.imageFontFlag,
+                imageId: typeof f.imageId === "number" ? f.imageId : -1,
+                letterLayoutLength: layout.length,
+                jaLetterLayoutLength: jaLayout.length,
+                letterLayout: layout,
+                jaLetterLayout: jaLayout || layout
+            });
+        }
+
+        return fonts;
+    }
+
+    function decodeGlyphArray(values, layout) {
+        if (!layout || layout.length === 0) return null;
+
+        var result = "";
+        var kanaCount = 0;
+        var skippedCount = 0;
+        var maxIdx = layout.length - 1;
+
+        for (var vi = 0; vi < values.length; vi += 1) {
+            var idx = values[vi];
+            // Skip non-integer or out-of-range values (may be control codes / separators)
+            if (typeof idx !== "number" || Math.floor(idx) !== idx || idx < 0 || idx > maxIdx) {
+                skippedCount += 1;
+                continue;
+            }
+            var ch = layout.charAt(idx);
+            if (ch === "\n") ch = " ";
+            result += ch;
+            if (/[぀-ヿ]/.test(ch)) kanaCount += 1;
+        }
+
+        // Require at least 3 kana characters and at least 30% of values decoded as text
+        if (kanaCount < 3) return null;
+        if (result.length < 3) return null;
+        if (values.length > 0 && result.length / (values.length - skippedCount || 1) < 0.3) return null;
+
+        return { text: result.trim(), kanaCount: kanaCount, skippedCount: skippedCount };
+    }
+
+    function scanGlyphArrays(parsed, fonts) {
+        if (!fonts || fonts.length === 0) return [];
+
+        // Only use fonts that have Japanese in their letterLayout
+        var jpFonts = [];
+        for (var fi = 0; fi < fonts.length; fi += 1) {
+            var layout = fonts[fi].jaLetterLayout || fonts[fi].letterLayout;
+            if (layout && /[぀-ヿ]/.test(layout)) {
+                jpFonts.push(fonts[fi]);
+            }
+        }
+
+        if (jpFonts.length === 0) {
+            structuralData.notes.push("No fonts with Japanese letterLayout found for glyph scan");
+            return [];
+        }
+
+        var results = [];
+        var arraysChecked = 0;
+        var candidateArrays = 0;
+        var MAX_RESULTS = 200;
+        var MAX_ARRAYS = 500000;
+        var MAX_ELEMENTS_CHECK = 200;
+
+        function walkForArrays(value, path, depth) {
+            if (arraysChecked >= MAX_ARRAYS || results.length >= MAX_RESULTS) return;
+            if (!value || typeof value !== "object" || depth > 30) return;
+
+            if (Object.prototype.toString.call(value) === "[object Array]") {
+                if (value.length >= 3 && value.length <= 5000) {
+                    arraysChecked += 1;
+
+                    // Quick check: are first few elements integers in a plausible glyph range?
+                    var maxGlyph = 0;
+                    for (var fi = 0; fi < jpFonts.length; fi += 1) {
+                        var layoutLen = (jpFonts[fi].jaLetterLayout || jpFonts[fi].letterLayout).length;
+                        if (layoutLen > maxGlyph) maxGlyph = layoutLen;
+                    }
+
+                    var intCount = 0;
+                    var checkLen = Math.min(value.length, MAX_ELEMENTS_CHECK);
+                    for (var ci = 0; ci < checkLen; ci += 1) {
+                        var v = value[ci];
+                        if (typeof v === "number" && Math.floor(v) === v && v >= 0 && v <= maxGlyph) {
+                            intCount += 1;
+                        }
+                    }
+                    // Require at least 30% of elements to be potential glyph indices
+                    var intRatio = intCount / (checkLen || 1);
+
+                    if (intRatio >= 0.3 && value.length >= 3) {
+                        candidateArrays += 1;
+                        for (var fj = 0; fj < jpFonts.length; fj += 1) {
+                            if (results.length >= MAX_RESULTS) break;
+                            var layout = jpFonts[fj].jaLetterLayout || jpFonts[fj].letterLayout;
+                            var decoded = decodeGlyphArray(value, layout, MAX_RESULTS);
+                            if (decoded) {
+                                results.push({
+                                    path: path,
+                                    length: value.length,
+                                    fontId: jpFonts[fj].id,
+                                    fontName: jpFonts[fj].name,
+                                    decodedText: decoded.text,
+                                    kanaCount: decoded.kanaCount,
+                                    sampleIndices: value.slice(0, 20)
+                                });
+                                break; // Only report first matching font per array
+                            }
+                        }
+                    }
+                }
+                // Recurse into array elements (sampling for very large arrays)
+                var sampleStep = value.length > 200 ? Math.floor(value.length / 50) : 1;
+                for (var si = 0; si < Math.min(value.length, 500); si += sampleStep) {
+                    walkForArrays(value[si], path + "[" + si + "]", depth + 1);
+                }
+                return;
+            }
+
+            // Plain object: recurse into values
+            var keys = Object.keys(value);
+            for (var ki = 0; ki < Math.min(keys.length, 200); ki += 1) {
+                try {
+                    walkForArrays(value[keys[ki]], path + "." + keys[ki], depth + 1);
+                } catch (e) {}
+            }
+        }
+
+        walkForArrays(parsed, "$", 0);
+        structuralData.notes.push("Glyph scan: " + arraysChecked + " arrays checked, " +
+            candidateArrays + " candidates, " + results.length + " decoded with kana");
+        return results;
+    }
+
+    function runGlyphIndexScan(parsed) {
+        if (!parsed || typeof parsed !== "object") return;
+        var fonts = extractFontData(parsed);
+        structuralData.fontData = fonts;
+        if (fonts.length > 0) {
+            structuralData.glyphDecodeResults = scanGlyphArrays(parsed, fonts);
+        }
+    }
+
     function flushStructuralData() {
         var fileUtils = getFileUtils();
         if (!fileUtils || !fileUtils.writeStringToFile) return;
 
+        refreshMessageVariableLinks();
         var out = JSON.stringify(structuralData, null, 2);
         var paths = [
             "OpenGameTranslator/output/opengametranslator-structural.json",
@@ -479,11 +971,18 @@
             if (/project\.json/i.test(source)) {
                 structuralScanJson(parsed, source, "", 0);
                 structuralData.projectKeys = Object.keys(parsed).sort();
+                collectActionGroups(parsed);
+                runGlyphIndexScan(parsed);
                 structuralData.notes.push("messageShows: " + structuralData.messageShows.length +
                     ", objectsWithTextId: " + structuralData.objectsWithTextId.length +
                     ", textListEntries: " + structuralData.textListEntries.length +
                     ", variableList: " + structuralData.variableList.length +
-                    ", objectsWithTextField: " + structuralData.objectsWithTextField.length);
+                    ", variableDefinitions: " + structuralData.variableDefinitions.length +
+                    ", switchVariableChanges: " + structuralData.switchVariableChanges.length +
+                    ", actionGroups: " + structuralData.actionGroups.length +
+                    ", objectsWithTextField: " + structuralData.objectsWithTextField.length +
+                    ", fontData: " + structuralData.fontData.length +
+                    ", glyphDecodeResults: " + structuralData.glyphDecodeResults.length);
             }
 
             currentJsonSource = null;
