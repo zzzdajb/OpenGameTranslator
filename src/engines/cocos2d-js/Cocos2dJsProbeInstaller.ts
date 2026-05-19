@@ -288,6 +288,7 @@ export class Cocos2dJsProbeInstaller {
         const outputFilePaths: readonly string[] = [
             resolvedPaths.loaderOutputPath,
             resolvedPaths.probeOutputPath,
+            path.join(resolvedPaths.workdirPath, "output", "opengametranslator-structural.json"),
             path.join(resolvedPaths.workdirPath, "probe-output", "opengametranslator-loader.json"),
             path.join(resolvedPaths.workdirPath, "probe-output", "opengametranslator-probe.json"),
             path.join(resolvedPaths.workdirPath, "probe-output", "opengametranslator-extracted-texts.json"),

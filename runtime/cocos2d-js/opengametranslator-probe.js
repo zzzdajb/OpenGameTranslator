@@ -10,6 +10,7 @@
     var candidateTextSeen = {};
     var displayedTextSeen = {};
     var currentJsonSource = null;
+    var focusedAnimationIds = {};
 
     var state = {
         formatVersion: 1,
@@ -214,6 +215,44 @@
         });
     }
 
+    function recordSwitchDefinition(obj, basePath) {
+        if (structuralData.switchDefinitions.length >= 12000) {
+            return;
+        }
+
+        structuralData.switchDefinitions.push({
+            path: basePath,
+            id: typeof obj.id === "number" ? obj.id : null,
+            name: typeof obj.name === "string" ? obj.name : "",
+            memo: typeof obj.memo === "string" ? limitText(obj.memo, 300) : "",
+            initialValue: typeof obj.initialValue === "boolean" ? obj.initialValue : null,
+            toBeSaved: typeof obj.toBeSaved === "boolean" ? obj.toBeSaved : null,
+            folder: typeof obj.folder === "boolean" ? obj.folder : null
+        });
+    }
+
+    function recordImageDefinition(obj, basePath) {
+        if (structuralData.imageDefinitions.length >= 20000) {
+            return;
+        }
+
+        if (typeof obj.id !== "number" &&
+                typeof obj.name !== "string" &&
+                typeof obj.filename !== "string" &&
+                typeof obj.srcFilename !== "string") {
+            return;
+        }
+
+        structuralData.imageDefinitions.push({
+            path: basePath,
+            id: typeof obj.id === "number" ? obj.id : null,
+            name: typeof obj.name === "string" ? obj.name : "",
+            filename: typeof obj.filename === "string" ? obj.filename : "",
+            srcFilename: typeof obj.srcFilename === "string" ? obj.srcFilename : "",
+            memo: typeof obj.memo === "string" ? limitText(obj.memo, 300) : ""
+        });
+    }
+
     function recordSwitchVariableChange(obj, basePath) {
         if (!obj || typeof obj.switchVariableChange !== "object" || obj.switchVariableChange === null) {
             return;
@@ -293,6 +332,8 @@
 
     function collectActionGroups(parsed) {
         structuralData.actionGroups = [];
+        structuralData.focusedActionGroups = [];
+        focusedAnimationIds = {};
         scanActionGroupCandidates(parsed, "", 0);
     }
 
@@ -362,6 +403,22 @@
             displayRelatedActionNameCount: displayRelatedCount,
             actions: actions
         });
+
+        if (isFocusedActionGroup(owner, actions) && structuralData.focusedActionGroups.length < 120) {
+            structuralData.focusedActionGroups.push({
+                path: basePath,
+                objectId: primitiveValue(owner.id),
+                objectName: typeof owner.name === "string" ? limitText(owner.name, 120) : "",
+                ownerFields: pickPrimitiveFields(owner, 120),
+                actionCount: actionList.length,
+                commandTotal: commandTotal,
+                actions: summarizeFocusedActions(actionList)
+            });
+
+            if (typeof owner.animationId === "number") {
+                focusedAnimationIds[String(owner.animationId)] = true;
+            }
+        }
     }
 
     function summarizeAction(action, actionIndex) {
@@ -396,6 +453,470 @@
         collectCommandsFromValue(action.actionCommandListObject, summary, 0);
 
         return summary;
+    }
+
+    function isFocusedActionGroup(owner, actions) {
+        var objectName = typeof owner.name === "string" ? owner.name : "";
+        if (/Opening|Ending|ending|エンディング|day|event|テキスト/.test(objectName)) {
+            return true;
+        }
+
+        for (var i = 0; i < actions.length; i += 1) {
+            if (/テキストフィールド表示|繰り返し|アニメーション変数|終了・次へ|テキスト表示|テキスト枠表示|次のテキスト|消すテンプレ|出現テンプレ/.test(actions[i].name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function summarizeFocusedActions(actionList) {
+        var actions = [];
+
+        for (var i = 0; i < Math.min(actionList.length, 140); i += 1) {
+            var action = actionList[i];
+            if (!action || typeof action !== "object") continue;
+
+            actions.push({
+                index: i,
+                id: primitiveValue(action.id),
+                name: typeof action.name === "string" ? limitText(action.name, 160) : "",
+                commandSamples: collectFocusedCommandSamples(action, 80)
+            });
+        }
+
+        return actions;
+    }
+
+    function collectFocusedCommandSamples(action, maxSamples) {
+        var samples = [];
+
+        collectFocusedCommandsFromValue(action.objCommandList, "objCommandList", samples, 0, maxSamples);
+        collectFocusedCommandsFromValue(action.commonActionCommandList, "commonActionCommandList", samples, 0, maxSamples);
+        collectFocusedCommandsFromValue(action.actionCommandListObject, "actionCommandListObject", samples, 0, maxSamples);
+
+        return samples;
+    }
+
+    function collectFocusedCommandsFromValue(value, path, samples, depth, maxSamples) {
+        if (!value || typeof value !== "object" || depth > 8 || samples.length >= maxSamples) {
+            return;
+        }
+
+        if (Object.prototype.toString.call(value) === "[object Array]") {
+            for (var i = 0; i < Math.min(value.length, 200) && samples.length < maxSamples; i += 1) {
+                collectFocusedCommandsFromValue(value[i], path + "[" + i + "]", samples, depth + 1, maxSamples);
+            }
+            return;
+        }
+
+        try {
+            if (isCommandLikeObject(value)) {
+                samples.push(makeCommandSample(value, path));
+                if (samples.length >= maxSamples) {
+                    return;
+                }
+            }
+
+            var keys = Object.keys(value);
+            for (var ki = 0; ki < Math.min(keys.length, 160) && samples.length < maxSamples; ki += 1) {
+                var key = keys[ki];
+                var child = value[key];
+                if (child !== null && typeof child === "object") {
+                    collectFocusedCommandsFromValue(child, path + "." + key, samples, depth + 1, maxSamples);
+                }
+            }
+        } catch (e) {
+            // Focused command dumps are diagnostic only.
+        }
+    }
+
+    function isCommandLikeObject(value) {
+        if (typeof value.commandType !== "undefined") {
+            return true;
+        }
+
+        return Boolean(value.messageShow || value.scrollMessageShow || value.switchVariableChange ||
+            value.objectCreate || value.objectDelete || value.objectAction || value.soundPlay ||
+            value.sceneTerminate || value.imageShow || value.movieShow || value.particleShow ||
+            value.templateMove || value.templateCreate || value.text);
+    }
+
+    function makeCommandSample(command, path) {
+        var sample = {
+            path: path,
+            commandType: primitiveValue(command.commandType),
+            keys: Object.keys(command).slice(0, 50),
+            primitiveFields: pickPrimitiveFields(command, 80)
+        };
+
+        copyNestedPrimitiveObject(sample, command, "messageShow");
+        copyNestedPrimitiveObject(sample, command, "scrollMessageShow");
+        copyNestedPrimitiveObject(sample, command, "switchVariableChange");
+        copyNestedPrimitiveObject(sample, command, "actionExec");
+        copyNestedPrimitiveObject(sample, command, "objectCreate");
+        copyNestedPrimitiveObject(sample, command, "objectDelete");
+        copyNestedPrimitiveObject(sample, command, "objectAction");
+        copyNestedPrimitiveObject(sample, command, "objectChange");
+        copyNestedPrimitiveObject(sample, command, "objectMove");
+        copyNestedPrimitiveObject(sample, command, "objectShow");
+        copyNestedPrimitiveObject(sample, command, "objectLock");
+        copyNestedPrimitiveObject(sample, command, "wait");
+        copyNestedPrimitiveObject(sample, command, "soundPlay");
+        copyNestedPrimitiveObject(sample, command, "sceneTerminate");
+        copyNestedPrimitiveObject(sample, command, "imageShow");
+        copyNestedPrimitiveObject(sample, command, "movieShow");
+        copyNestedPrimitiveObject(sample, command, "particleShow");
+
+        return sample;
+    }
+
+    function collectFocusedAnimationData(parsed) {
+        structuralData.focusedAnimations = [];
+        if (!parsed || typeof parsed !== "object") {
+            return;
+        }
+
+        scanAnimationCandidates(parsed.animationList, "animationList", 0);
+    }
+
+    function scanAnimationCandidates(value, path, depth) {
+        if (!value || typeof value !== "object" || depth > 12 || structuralData.focusedAnimations.length >= 160) {
+            return;
+        }
+
+        if (Object.prototype.toString.call(value) === "[object Array]") {
+            for (var i = 0; i < Math.min(value.length, 2000); i += 1) {
+                scanAnimationCandidates(value[i], path + "[" + i + "]", depth + 1);
+            }
+            return;
+        }
+
+        try {
+            var id = typeof value.id === "number" ? value.id : null;
+            var name = typeof value.name === "string" ? value.name : "";
+            var isFocused = id !== null && focusedAnimationIds[String(id)];
+            var isTextNamed = /テキスト|event|Opening|Ending|エンディング|day/.test(name);
+
+            if ((isFocused || isTextNamed) && Object.prototype.toString.call(value.motionList) === "[object Array]") {
+                structuralData.focusedAnimations.push(summarizeAnimation(value, path));
+            }
+
+            var keys = Object.keys(value);
+            for (var ki = 0; ki < Math.min(keys.length, 300); ki += 1) {
+                var key = keys[ki];
+                var child = value[key];
+                if (child !== null && typeof child === "object") {
+                    scanAnimationCandidates(child, path + "." + key, depth + 1);
+                }
+            }
+        } catch (e) {
+            structuralData.notes.push("scanAnimationCandidates error at " + path + ": " + e);
+        }
+    }
+
+    function summarizeAnimation(animation, path) {
+        var summary = {
+            path: path,
+            id: primitiveValue(animation.id),
+            name: typeof animation.name === "string" ? limitText(animation.name, 160) : "",
+            primitiveFields: pickPrimitiveFields(animation, 80),
+            resourceInfoList: [],
+            motionList: []
+        };
+
+        if (Object.prototype.toString.call(animation.resourceInfoList) === "[object Array]") {
+            for (var ri = 0; ri < Math.min(animation.resourceInfoList.length, 120); ri += 1) {
+                var resource = animation.resourceInfoList[ri];
+                if (resource && typeof resource === "object") {
+                    summary.resourceInfoList.push(pickPrimitiveFields(resource, 80));
+                }
+            }
+        }
+
+        if (Object.prototype.toString.call(animation.motionList) === "[object Array]") {
+            for (var mi = 0; mi < Math.min(animation.motionList.length, 180); mi += 1) {
+                var motion = animation.motionList[mi];
+                if (motion && typeof motion === "object") {
+                    summary.motionList.push(summarizeMotion(motion));
+                }
+            }
+        }
+
+        return summary;
+    }
+
+    function summarizeMotion(motion) {
+        var summary = {
+            id: primitiveValue(motion.id),
+            name: typeof motion.name === "string" ? limitText(motion.name, 160) : "",
+            primitiveFields: pickPrimitiveFields(motion, 80),
+            directionList: []
+        };
+
+        if (Object.prototype.toString.call(motion.directionList) === "[object Array]") {
+            for (var di = 0; di < Math.min(motion.directionList.length, 16); di += 1) {
+                var direction = motion.directionList[di];
+                if (direction && typeof direction === "object") {
+                    summary.directionList.push(summarizeDirection(direction));
+                }
+            }
+        }
+
+        return summary;
+    }
+
+    function summarizeDirection(direction) {
+        var summary = {
+            id: primitiveValue(direction.id),
+            name: typeof direction.name === "string" ? limitText(direction.name, 160) : "",
+            animationName: typeof direction.animationName === "string" ? limitText(direction.animationName, 160) : "",
+            primitiveFields: pickPrimitiveFields(direction, 80),
+            frameList: []
+        };
+
+        if (Object.prototype.toString.call(direction.frameList) === "[object Array]") {
+            for (var fi = 0; fi < Math.min(direction.frameList.length, 80); fi += 1) {
+                var frame = direction.frameList[fi];
+                if (frame && typeof frame === "object") {
+                    summary.frameList.push(pickPrimitiveFields(frame, 80));
+                }
+            }
+        }
+
+        return summary;
+    }
+
+    function exportFocusedImageResources() {
+        structuralData.decryptedImageExports = [];
+
+        var fileUtils = getFileUtils();
+        if (!fileUtils || typeof fileUtils.getDataFromFile !== "function" ||
+                typeof fileUtils.writeDataToFile !== "function") {
+            structuralData.notes.push("Binary image export skipped: getDataFromFile/writeDataToFile not available");
+            return;
+        }
+
+        var imageDefinitionsById = {};
+        for (var ii = 0; ii < structuralData.imageDefinitions.length; ii += 1) {
+            var imageDefinition = structuralData.imageDefinitions[ii];
+            if (typeof imageDefinition.id === "number") {
+                imageDefinitionsById[String(imageDefinition.id)] = imageDefinition;
+            }
+        }
+
+        var imageIds = {};
+        for (var ai = 0; ai < structuralData.focusedAnimations.length; ai += 1) {
+            var animation = structuralData.focusedAnimations[ai];
+            var resources = animation.resourceInfoList || [];
+            for (var ri = 0; ri < resources.length; ri += 1) {
+                // AGTK uses "image" for resource-to-image-definition mapping.
+                var imageId = resources[ri].image;
+                if (typeof imageId !== "number") {
+                    imageId = resources[ri].imageId;
+                }
+                if (typeof imageId === "number" && imageId > 0) {
+                    imageIds[String(imageId)] = true;
+                }
+            }
+        }
+
+        var ids = Object.keys(imageIds).sort(function (a, b) {
+            return Number(a) - Number(b);
+        });
+
+        tryCreateDirectory(fileUtils, "OpenGameTranslator/output");
+        tryCreateDirectory(fileUtils, "OpenGameTranslator/output/decrypted-img");
+        tryCreateDirectory(fileUtils, "Resources/OpenGameTranslator/output");
+        tryCreateDirectory(fileUtils, "Resources/OpenGameTranslator/output/decrypted-img");
+
+        for (var idIndex = 0; idIndex < Math.min(ids.length, 220); idIndex += 1) {
+            var id = ids[idIndex];
+            var definition = imageDefinitionsById[id];
+            var filename = definition && definition.filename ? definition.filename : "";
+            if (!filename) {
+                structuralData.decryptedImageExports.push({
+                    imageId: Number(id),
+                    ok: false,
+                    reason: "missing filename"
+                });
+                continue;
+            }
+
+            var exportEntry = {
+                imageId: Number(id),
+                name: definition.name || "",
+                filename: filename,
+                ok: false,
+                outputPath: "",
+                data: null,
+                reason: ""
+            };
+
+            try {
+                var data = fileUtils.getDataFromFile(filename);
+                exportEntry.data = describeBinaryData(data);
+                var outputFilename = basename(filename);
+                var outputPaths = [
+                    "OpenGameTranslator/output/decrypted-img/" + outputFilename,
+                    "Resources/OpenGameTranslator/output/decrypted-img/" + outputFilename
+                ];
+
+                for (var pi = 0; pi < outputPaths.length; pi += 1) {
+                    try {
+                        if (fileUtils.writeDataToFile(data, outputPaths[pi])) {
+                            exportEntry.ok = true;
+                            exportEntry.outputPath = outputPaths[pi];
+                            break;
+                        }
+                    } catch (writeError) {
+                        exportEntry.reason = "write failed: " + writeError;
+                    }
+                }
+
+                if (!exportEntry.ok && !exportEntry.reason) {
+                    exportEntry.reason = "writeDataToFile returned false";
+                }
+            } catch (readError) {
+                exportEntry.reason = "read failed: " + readError;
+            }
+
+            structuralData.decryptedImageExports.push(exportEntry);
+        }
+    }
+
+    function describeBinaryData(data) {
+        var description = {
+            type: Object.prototype.toString.call(data),
+            length: null,
+            firstBytes: [],
+            formatHint: "unknown"
+        };
+
+        if (!data) {
+            return description;
+        }
+
+        if (typeof data.length === "number") {
+            description.length = data.length;
+        } else if (typeof data.byteLength === "number") {
+            description.length = data.byteLength;
+        }
+
+        var count = Math.min(description.length || 0, 32);
+        for (var i = 0; i < count; i += 1) {
+            try {
+                description.firstBytes.push(Number(data[i]));
+            } catch (e) {
+                break;
+            }
+        }
+
+        // Detect file format from magic bytes.
+        var fb = description.firstBytes;
+        if (fb.length >= 8) {
+            // PNG: 89 50 4E 47 0D 0A 1A 0A
+            if (fb[0] === 137 && fb[1] === 80 && fb[2] === 78 && fb[3] === 71) {
+                description.formatHint = "PNG";
+                // Check for PNG text chunks by scanning the first 1024 bytes for tEXt/iTXt/zTXt
+                try {
+                    var chunkSearch = new Uint8Array(Array.prototype.slice.call(data, 0, Math.min(1024, description.length || 0)));
+                    var chunkStr = "";
+                    for (var ci = 0; ci < chunkSearch.length; ci += 1) {
+                        chunkStr += String.fromCharCode(chunkSearch[ci]);
+                    }
+                    var textChunkIdx = chunkStr.indexOf("tEXt");
+                    if (textChunkIdx < 0) textChunkIdx = chunkStr.indexOf("iTXt");
+                    if (textChunkIdx < 0) textChunkIdx = chunkStr.indexOf("zTXt");
+                    if (textChunkIdx >= 0) {
+                        description.formatHint = "PNG+textChunk@" + textChunkIdx;
+                        // Try to extract keyword+text from the chunk.
+                        try {
+                            var kwEnd = chunkStr.indexOf("\0", textChunkIdx + 4);
+                            if (kwEnd > textChunkIdx) {
+                                var keyword = chunkStr.slice(textChunkIdx + 4, kwEnd);
+                                var textStart = kwEnd + 1;
+                                var textEnd = chunkStr.indexOf("IEND", textStart);
+                                if (textEnd < 0) textEnd = chunkStr.length;
+                                description.embeddedKeyword = safeStr(keyword);
+                                description.embeddedText = safeStr(chunkStr.slice(textStart, textEnd).replace(/[^\x20-\x7E぀-ゟ゠-ヿ一-鿿]/g, "?")).slice(0, 500);
+                            }
+                        } catch (ex) {
+                            description.embeddedText = "extract error: " + ex;
+                        }
+                    }
+                } catch (csErr) {
+                    description.formatHint += "+chunkScanErr:" + csErr;
+                }
+            }
+            // JPEG: FF D8 FF
+            else if (fb[0] === 255 && fb[1] === 216 && fb[2] === 255) {
+                description.formatHint = "JPEG";
+            }
+            // WebP: 52 49 46 46 ... 57 45 42 50
+            else if (fb[0] === 82 && fb[1] === 73 && fb[2] === 70 && fb[3] === 70) {
+                description.formatHint = (fb[8] === 87 && fb[9] === 69 && fb[10] === 66 && fb[11] === 80) ? "WebP" : "RIFF";
+            }
+            // BMP: 42 4D
+            else if (fb[0] === 66 && fb[1] === 77) {
+                description.formatHint = "BMP";
+            }
+            // Gzip: 1F 8B
+            else if (fb[0] === 31 && fb[1] === 139) {
+                description.formatHint = "Gzip";
+            }
+            // ZIP: 50 4B
+            else if (fb[0] === 80 && fb[1] === 75) {
+                description.formatHint = "ZIP";
+            }
+            // enc header starts with non-standard bytes — mark first 4 as hex.
+            else {
+                var hex4 = "";
+                for (var hi = 0; hi < Math.min(fb.length, 4); hi += 1) {
+                    hex4 += (fb[hi] < 16 ? "0" : "") + fb[hi].toString(16);
+                }
+                description.formatHint = "unknown-0x" + hex4;
+            }
+        }
+
+        return description;
+    }
+
+    function tryCreateDirectory(fileUtils, directoryPath) {
+        try {
+            fileUtils.createDirectory && fileUtils.createDirectory(directoryPath);
+        } catch (e) {
+            // Directory creation is best-effort for diagnostic exports.
+        }
+    }
+
+    function basename(filePath) {
+        var parts = String(filePath).split(/[\\/]/);
+        return parts.length > 0 ? parts[parts.length - 1] : String(filePath);
+    }
+
+    function copyNestedPrimitiveObject(sample, command, key) {
+        if (command[key] && typeof command[key] === "object") {
+            sample[key] = pickPrimitiveFields(command[key], 80);
+        }
+    }
+
+    function pickPrimitiveFields(obj, maxCount) {
+        var result = {};
+        var keys = Object.keys(obj);
+        var count = 0;
+
+        for (var i = 0; i < keys.length && count < maxCount; i += 1) {
+            var key = keys[i];
+            var value = obj[key];
+            if (value === null || typeof value === "undefined" ||
+                    typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+                result[key] = primitiveValue(value);
+                count += 1;
+            }
+        }
+
+        return result;
     }
 
     function collectCommandsFromValue(value, summary, depth) {
@@ -495,11 +1016,16 @@
         objectsWithTextField: [],
         variableList: [],
         variableDefinitions: [],
+        switchDefinitions: [],
+        imageDefinitions: [],
         messageVariableIds: {},
         switchVariableChanges: [],
         messageVariableDefinitions: [],
         messageVariableAssignments: [],
         actionGroups: [],
+        focusedActionGroups: [],
+        focusedAnimations: [],
+        decryptedImageExports: [],
         textIdToPath: {},
         fontData: [],
         glyphDecodeResults: [],
@@ -583,6 +1109,15 @@
                 }
 
                 recordVariableDefinition(obj, basePath);
+            }
+
+            // Collect switch definitions so focused command dumps can be mapped back to readable names.
+            if (basePath.indexOf("switchList") !== -1 && !Array.isArray(obj)) {
+                recordSwitchDefinition(obj, basePath);
+            }
+
+            if (basePath.indexOf("imageList") !== -1 && !Array.isArray(obj)) {
+                recordImageDefinition(obj, basePath);
             }
 
             // Variable text in AGTK often travels through switchVariableChange before messageShow displays it.
@@ -972,14 +1507,21 @@
                 structuralScanJson(parsed, source, "", 0);
                 structuralData.projectKeys = Object.keys(parsed).sort();
                 collectActionGroups(parsed);
+                collectFocusedAnimationData(parsed);
+                exportFocusedImageResources();
                 runGlyphIndexScan(parsed);
                 structuralData.notes.push("messageShows: " + structuralData.messageShows.length +
                     ", objectsWithTextId: " + structuralData.objectsWithTextId.length +
                     ", textListEntries: " + structuralData.textListEntries.length +
                     ", variableList: " + structuralData.variableList.length +
                     ", variableDefinitions: " + structuralData.variableDefinitions.length +
+                    ", switchDefinitions: " + structuralData.switchDefinitions.length +
+                    ", imageDefinitions: " + structuralData.imageDefinitions.length +
                     ", switchVariableChanges: " + structuralData.switchVariableChanges.length +
                     ", actionGroups: " + structuralData.actionGroups.length +
+                    ", focusedActionGroups: " + structuralData.focusedActionGroups.length +
+                    ", focusedAnimations: " + structuralData.focusedAnimations.length +
+                    ", decryptedImageExports: " + structuralData.decryptedImageExports.length +
                     ", objectsWithTextField: " + structuralData.objectsWithTextField.length +
                     ", fontData: " + structuralData.fontData.length +
                     ", glyphDecodeResults: " + structuralData.glyphDecodeResults.length);
