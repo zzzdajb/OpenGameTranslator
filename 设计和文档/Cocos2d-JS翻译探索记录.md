@@ -423,3 +423,28 @@ Maya 在 ADV/视觉小说类型中属于极高难度，但非究极：
 - 硬件绑定加密（密钥依赖设备指纹）
 
 **核心教训**：AGTK 引擎每层抽象都比预期低一级——JS→C++ binding→CRT→Win32 API。今后同类游戏直接沉到 `CreateFileW`，跳过中间层探测。
+
+## 17. 触摸场景闪退修复（2026-05-21）
+
+### 17.1 故障现象
+
+对话场景正常，进入触摸（互动）场景后游戏闪退。Event Viewer 报 `c0000005`（访问违例）在 `player.exe+9ec73`。
+
+### 17.2 排错过程
+
+前 7 轮在错误方向上穷举：
+- inline hook → IAT hook → 简化 detour → 删 `execActionMessageShow` → 全删 AGTK hook（存活）→ 逐组加回
+
+极简版（仅 `CreateFileW` IAT hook）存活后，二分排除定位到 `TextGui::getString`。
+
+### 17.3 根因
+
+`TextGui::getString` 使用 CALL-based inline hook（因为返回 `std::string` 需要隐藏指针）。CALL 补丁在栈上多压了一个返回地址，导致 `hidden_ptr` 偏移从 `[esp+12]` 变为 `[esp+16]`。detour 未考虑这一偏移，读到的是游戏代码地址，当作 `std::string*` 使用，污染了 `esi`/`ebx`（调用者保存寄存器）。触摸场景加载资源时使用了被污染的寄存器 → 访问违例。
+
+### 17.4 修复
+
+移除 `TextGui::getString` hook（诊断用途，非翻译功能所需）。保留其余 6 个 AGTK hook + CRT hook + heartbeat + `CreateFileW` IAT hook。
+
+### 17.5 教训
+
+**严禁穷举式排错。** 本次根因是静态代码 bug——读一遍 detour 代码即可发现栈偏移错误。Event Viewer 的 `c0000005` + 崩溃日志的 `img/262.png` 已经足够推理。该教训已写入 `AGENTS.md`/`CLAUDE.md`/`代码要求.md`：debug 硬上限 3 轮，静态分析优先，每次改动必须有可证伪假设。
