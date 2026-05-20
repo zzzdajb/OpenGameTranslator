@@ -1990,12 +1990,8 @@ static void InstallExportHooks(void) {
             DetourExecActionMessageShow,
             NULL, NULL, {0}, 0, 0
         },
-        {
-            "TextGui::getString",
-            "?getString@TextGui@agtk@@UBE?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ",
-            DetourTextGuiGetString,
-            NULL, NULL, {0}, 0, 0, 0, 0, 1
-        }
+        /* TextGui::getString removed: CALL-based detour has stack offset bug
+           (extra ret addr from CALL patch shifts hidden_ptr by 4 bytes). */
     };
     void **mainTrampolineSlots[] = {
         &g_updateText7Trampoline,
@@ -2004,7 +2000,7 @@ static void InstallExportHooks(void) {
         &g_updateTextRender8Trampoline,
         &g_textDataGetTextTrampoline,
         &g_execActionMessageShowTrampoline,
-        &g_textGuiGetStringTrampoline
+        /* &g_textGuiGetStringTrampoline removed */
     };
 
     InstallHooksForModule(mainModule, "player.exe", mainHooks, mainTrampolineSlots,
@@ -2483,23 +2479,21 @@ static void __cdecl LogGetStringResult(const char *label, const void *hiddenPtr)
 
 static __declspec(naked) void DetourTextGuiGetString(void) {
     __asm {
-        /* On entry via CALL-based detour:
-           [esp+0] = return address to original caller
-           [esp+4] = hidden_ptr (for return-by-value std::string)
+        /* On entry via CALL-based detour (CALL adds 4 bytes to stack):
+           [esp+0] = return address to getString+patchSize (from CALL patch)
+           [esp+4] = return address to original caller (from game's CALL)
+           [esp+8] = hidden_ptr (for return-by-value std::string, pushed by caller)
            ecx     = this (unchanged, needed by original function) */
         push ebx
         push esi
-        mov ebx, [esp + 12]     /* hidden_ptr (after 2 pushes) */
+        mov ebx, [esp + 16]     /* hidden_ptr (after 2 pushes + 2 extra ret addrs) */
 
-        /* Push hidden_ptr so it's at [esp+4] after the following call.
-           The original function expects: [esp]=ret_addr, [esp+4]=hidden_ptr. */
+        /* Pass hidden_ptr to original function: push it, trampoline CALLs, getString
+           returns here with std::string constructed at *hidden_ptr. */
         push ebx
         call dword ptr [g_textGuiGetStringTrampoline]
-        /* Trampoline runs original bytes + JMP to original body.
-           Original function constructs std::string at *hidden_ptr, returns here. */
 
-        /* After original ret: [esp+0] = hidden_ptr (our push before call).
-           ebx still holds hidden_ptr; the std::string there is now initialized. */
+        /* Log the result. */
         push ebx
         push OFFSET g_labelTextGuiGetStringResult
         call LogGetStringResult
@@ -2508,9 +2502,10 @@ static __declspec(naked) void DetourTextGuiGetString(void) {
         add esp, 4              /* pop hidden_ptr (our push before call) */
         pop esi
         pop ebx
-        /* Stack now: [esp+0]=ret_to_original_caller, [esp+4]=hidden_ptr.
-           eax = hidden_ptr (return value from original function, preserved). */
-        ret
+        /* Stack: [esp+0]=ret_to_getString+patchSize, [esp+4]=ret_to_game, [esp+8]=hidden_ptr.
+           Skip the intermediate ret addr from CALL patch, return directly to game. */
+        pop eax                 /* discard ret_to_getString+patchSize */
+        ret 4                   /* return to game caller, also clean hidden_ptr */
     }
 }
 
@@ -3601,56 +3596,45 @@ static void ScanRTTI(void) {
 /* ---- DLL Entry Point ---- */
 
 static DWORD WINAPI DiagnosticThread(LPVOID parameter) {
-    HINSTANCE hinstDLL = (HINSTANCE)parameter;
     HMODULE cocosModule;
     char *lastSlash;
 
     InitLogPath();
+    Log("=== OpenGameTranslator Hook DLL (minimal) ===\n");
 
-    Log("=== OpenGameTranslator Hook DLL Diagnostic ===\n");
-    Log("Process ID: %lu\n", GetCurrentProcessId());
-    Log("DLL loaded at: 0x%p\n", hinstDLL);
-
-    /* Set up image replacement directory for the fopen redirect hook. */
+    /* Set up image replacement directory. */
     GetModuleFileNameA(NULL, g_gameDirNarrow, MAX_PATH);
     lastSlash = strrchr(g_gameDirNarrow, '\\');
     if (lastSlash) *lastSlash = '\0';
     _snprintf_s(g_replacementDirNarrow, MAX_PATH, _TRUNCATE,
                 "%s\\Resources\\OpenGameTranslator\\translated-img", g_gameDirNarrow);
-    Log("Replacement image directory: %s\n", g_replacementDirNarrow);
+    Log("Replacement dir: %s\n", g_replacementDirNarrow);
 
-    InitModuleInfo();
-    ResolveMessageDataVtables();
-    ScanRTTI();
-    InstallExportHooks();
+    /* InitModuleInfo needed for g_mainModule (used by IAT hooks). */
+    g_mainModule = GetModuleHandleW(NULL);
 
-    /* Install CRT IAT hooks to intercept fopen for image injection. */
+    /* Install CreateFileW IAT hook in libcocos2d.dll. */
     cocosModule = GetModuleHandleW(L"libcocos2d.dll");
-    InstallCrtIatHooks(g_mainModule, cocosModule);
-
-    /* Install CreateFileW hook for image injection (game uses Win32 API, not CRT). */
-    {
-        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
-        InlineHook cfHook;
-        memset(&cfHook, 0, sizeof(cfHook));
-        cfHook.label = "CreateFileW";
-        cfHook.target = (BYTE *)GetProcAddress(kernel32, "CreateFileW");
-        cfHook.detour = DetourCreateFileW;
-        cfHook.allowNonPrologue = 1;
-        if (cfHook.target) {
-            Log("CreateFileW at 0x%p\n", cfHook.target);
-            InstallInlineHook(&cfHook, &g_createFileWTrampoline);
-        } else {
-            Log("CreateFileW not found in kernel32\n");
-        }
+    if (cocosModule) {
+        InstallIatHookForModule(cocosModule, "libcocos2d.dll", "CreateFileW",
+                                DetourCreateFileW, &g_createFileWTrampoline);
+        Log("CreateFileW IAT hook installed\n");
+    } else {
+        Log("libcocos2d.dll not found\n");
     }
 
-    /* Start heartbeat. */
+    /* Add back CRT IAT hooks. */
+    InstallCrtIatHooks(g_mainModule, cocosModule);
+
+    /* Add back heartbeat. */
     HANDLE hb = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);
     if (hb) CloseHandle(hb);
 
-    FlushLog();
-    Log("[Init] Hook installation complete. Waiting for text calls...\n");
+    /* Install AGTK diagnostic hooks (6 of 7; TextGui::getString excluded:
+       its CALL-based detour has a 4-byte stack offset bug). */
+    InitModuleInfo();
+    InstallExportHooks();
+
     FlushLog();
     return 0;
 }

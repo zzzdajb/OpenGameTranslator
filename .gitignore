@@ -41,3 +41,5 @@ tools/hook_dll/*.obj
 # Python virtual environment
 .venv/
 uv.lock
+__pycache__/
+*.pyc

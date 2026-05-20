@@ -561,11 +561,7 @@ def render_image(
         backup_path = output_path.with_name(f"{output_path.stem}.bak.png")
         if not backup_path.exists():
             shutil.copy2(output_path, backup_path)
-    # Convert back to palette mode to match original asset format.
-    # The game expects paletted (P) images; RGB images cause crashes in
-    # touch/H-scene rendering paths that manipulate the palette.
-    image_p = image.convert("P", palette=Image.ADAPTIVE, colors=2)
-    image_p.save(output_path, optimize=True)
+    image.save(output_path)
     return output_path, results
 
 
