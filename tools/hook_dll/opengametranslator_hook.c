@@ -1838,6 +1838,93 @@ static int InstallIatHookForModule(HMODULE moduleHandle, const char *moduleLabel
     return installed;
 }
 
+static char g_gameDirNarrow[MAX_PATH];
+static char g_replacementDirNarrow[MAX_PATH];
+
+/* Check if fopen'ed file is a dialogue image we have a replacement for.
+   Returns FILE* for the replacement if found; NULL to continue normally. */
+static FILE *TryRedirectImageFile(const char *filename, const char *mode) {
+    const char *dot;
+    const char *slash;
+    const char *base;
+    char replacementPath[MAX_PATH];
+    FILE *fp;
+
+    if (!filename || !mode) return NULL;
+
+    /* Only redirect read operations. */
+    if (mode[0] != 'r') return NULL;
+
+    /* Only redirect .png files. */
+    dot = strrchr(filename, '.');
+    if (!dot || (_stricmp(dot, ".png") != 0)) return NULL;
+
+    /* Extract basename. */
+    slash = strrchr(filename, '\\');
+    if (slash) base = slash + 1;
+    else {
+        slash = strrchr(filename, '/');
+        if (slash) base = slash + 1;
+        else base = filename;
+    }
+
+    /* Build replacement path: <Resources>/OpenGameTranslator/translated-img/<basename> */
+    _snprintf_s(replacementPath, MAX_PATH, _TRUNCATE,
+                "%s\\%s", g_replacementDirNarrow, base);
+
+    /* Use the original CRT fopen to avoid recursion. */
+    if (g_crtFopenOriginal) {
+        fp = ((FILE *(__cdecl *)(const char *, const char *))g_crtFopenOriginal)(
+            replacementPath, mode);
+    } else {
+        fp = NULL;
+    }
+
+    if (fp) {
+        Log("[ImageInject:fopen] Redirected %s -> %s\n", filename, replacementPath);
+    }
+
+    return fp;
+}
+
+/* Wide-char version for CreateFileW hook.
+   Returns redirected HANDLE, or INVALID_HANDLE_VALUE to continue normally. */
+static HANDLE TryRedirectImageFileW(LPCWSTR filename) {
+    const wchar_t *dot;
+    const wchar_t *slash;
+    const wchar_t *base;
+    const wchar_t *mode = L"rb";
+    wchar_t replacementPath[MAX_PATH];
+    HANDLE h;
+
+    if (!filename) return INVALID_HANDLE_VALUE;
+
+    dot = wcsrchr(filename, L'.');
+    if (!dot || (_wcsicmp(dot, L".png") != 0)) return INVALID_HANDLE_VALUE;
+
+    slash = wcsrchr(filename, L'\\');
+    if (slash) base = slash + 1;
+    else {
+        slash = wcsrchr(filename, L'/');
+        if (slash) base = slash + 1;
+        else base = filename;
+    }
+
+    /* Convert basename to narrow for path building. */
+    _snwprintf_s(replacementPath, MAX_PATH, _TRUNCATE,
+                 L"%S\\%s", g_replacementDirNarrow, base);
+
+    /* Call original kernel32 CreateFileW. */
+    h = CreateFileW(replacementPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        Log("[ImageInject:CreateFileW] Redirected %S -> %S\n",
+            filename, replacementPath);
+    }
+
+    return h;
+}
+
 static void InstallCrtIatHooks(HMODULE mainModule, HMODULE cocosModule) {
     int installed = 0;
 
@@ -1848,12 +1935,14 @@ static void InstallCrtIatHooks(HMODULE mainModule, HMODULE cocosModule) {
     installed += InstallIatHookForModule(mainModule, "player.exe", "fread",
                                          DetourCrtFread, &g_crtFreadOriginal);
 
-    installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fopen",
-                                         DetourCrtFopen, &g_crtFopenOriginal);
-    installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fopen_s",
-                                         DetourCrtFopenS, &g_crtFopenSOriginal);
-    installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fread",
-                                         DetourCrtFread, &g_crtFreadOriginal);
+    if (cocosModule) {
+        installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fopen",
+                                             DetourCrtFopen, &g_crtFopenOriginal);
+        installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fopen_s",
+                                             DetourCrtFopenS, &g_crtFopenSOriginal);
+        installed += InstallIatHookForModule(cocosModule, "libcocos2d.dll", "fread",
+                                             DetourCrtFread, &g_crtFreadOriginal);
+    }
 
     Log("CRT IAT hook summary: installed=%d fopenOriginal=0x%p fopen_sOriginal=0x%p freadOriginal=0x%p\n",
         installed, g_crtFopenOriginal, g_crtFopenSOriginal, g_crtFreadOriginal);
@@ -3245,12 +3334,24 @@ static __declspec(naked) void DetourCrtFopen(void) {
         add esp, 12
         popad
         popfd
+        /* Try to redirect dialogue image to replacement PNG. */
+        mov eax, [esp + 4]   /* filename (1st arg, after ret addr) */
+        mov edx, [esp + 8]   /* mode (2nd arg) */
+        push edx
+        push eax
+        call TryRedirectImageFile
+        add esp, 8
+        test eax, eax
+        jnz redirect_success
+        /* No redirect -- call original fopen. */
         cmp dword ptr [g_crtFopenOriginal], 0
         jne call_original
         xor eax, eax
         ret
     call_original:
         jmp dword ptr [g_crtFopenOriginal]
+    redirect_success:
+        ret
     }
 }
 
@@ -3302,13 +3403,13 @@ static __declspec(naked) void DetourCrtFread(void) {
 
 /*
  * CreateFileW: __stdcall, first param is LPCWSTR filename at [esp+4].
- * Log all wide-char file opens to catch dialogue data files not read through Cocos2d.
+ * Log all wide-char file opens and redirect dialogue images to replacement PNGs.
  * Uses a re-entrancy guard because FlushLog() calls CreateFileW internally.
  */
 static __declspec(naked) void DetourCreateFileW(void) {
     __asm {
         cmp dword ptr [g_inFileHook], 0
-        jne skip_log
+        jne skip_all
         mov dword ptr [g_inFileHook], 1
         pushfd
         pushad
@@ -3316,10 +3417,24 @@ static __declspec(naked) void DetourCreateFileW(void) {
         push eax
         call LogFileOpenW
         add esp, 4
+        /* Try to redirect dialogue image to replacement PNG. */
+        mov eax, [esp + 40]  /* lpFileName */
+        push eax
+        call TryRedirectImageFileW
+        add esp, 4
+        cmp eax, -1          /* INVALID_HANDLE_VALUE */
+        je no_redirect
+        /* Redirect succeeded — return the replacement HANDLE. */
+        mov [esp + 28], eax  /* overwrite EAX in pushad save area */
         popad
         popfd
         mov dword ptr [g_inFileHook], 0
-    skip_log:
+        ret 28               /* stdcall: 7 params = 28 bytes */
+    no_redirect:
+        popad
+        popfd
+        mov dword ptr [g_inFileHook], 0
+    skip_all:
         jmp dword ptr [g_createFileWTrampoline]
     }
 }
@@ -3487,18 +3602,48 @@ static void ScanRTTI(void) {
 
 static DWORD WINAPI DiagnosticThread(LPVOID parameter) {
     HINSTANCE hinstDLL = (HINSTANCE)parameter;
+    HMODULE cocosModule;
+    char *lastSlash;
 
     InitLogPath();
 
     Log("=== OpenGameTranslator Hook DLL Diagnostic ===\n");
     Log("Process ID: %lu\n", GetCurrentProcessId());
     Log("DLL loaded at: 0x%p\n", hinstDLL);
-    Log("This diagnostic build captures AGTK/Cocos text calls; it does not modify game text.\n");
+
+    /* Set up image replacement directory for the fopen redirect hook. */
+    GetModuleFileNameA(NULL, g_gameDirNarrow, MAX_PATH);
+    lastSlash = strrchr(g_gameDirNarrow, '\\');
+    if (lastSlash) *lastSlash = '\0';
+    _snprintf_s(g_replacementDirNarrow, MAX_PATH, _TRUNCATE,
+                "%s\\Resources\\OpenGameTranslator\\translated-img", g_gameDirNarrow);
+    Log("Replacement image directory: %s\n", g_replacementDirNarrow);
 
     InitModuleInfo();
     ResolveMessageDataVtables();
     ScanRTTI();
     InstallExportHooks();
+
+    /* Install CRT IAT hooks to intercept fopen for image injection. */
+    cocosModule = GetModuleHandleW(L"libcocos2d.dll");
+    InstallCrtIatHooks(g_mainModule, cocosModule);
+
+    /* Install CreateFileW hook for image injection (game uses Win32 API, not CRT). */
+    {
+        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        InlineHook cfHook;
+        memset(&cfHook, 0, sizeof(cfHook));
+        cfHook.label = "CreateFileW";
+        cfHook.target = (BYTE *)GetProcAddress(kernel32, "CreateFileW");
+        cfHook.detour = DetourCreateFileW;
+        cfHook.allowNonPrologue = 1;
+        if (cfHook.target) {
+            Log("CreateFileW at 0x%p\n", cfHook.target);
+            InstallInlineHook(&cfHook, &g_createFileWTrampoline);
+        } else {
+            Log("CreateFileW not found in kernel32\n");
+        }
+    }
 
     /* Start heartbeat. */
     HANDLE hb = CreateThread(NULL, 0, HeartbeatThread, NULL, 0, NULL);

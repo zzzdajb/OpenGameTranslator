@@ -11,6 +11,7 @@ import { Cocos2dJsAdapter, type Cocos2dJsGamePaths } from "./Cocos2dJsAdapter.js
 const WORKDIR_NAME = "OpenGameTranslator";
 const MANIFEST_FILE_NAME = "manifest.json";
 const RUNTIME_SOURCE_RELATIVE_PATH = "runtime/cocos2d-js/opengametranslator-probe.js";
+const IMAGE_INJECTOR_SOURCE_RELATIVE_PATH = "runtime/cocos2d-js/opengametranslator-image-injector.js";
 const MARKER_BEGIN = "// OpenGameTranslator BEGIN";
 const MARKER_END = "// OpenGameTranslator END";
 const PROJECT_ROOT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -78,6 +79,7 @@ interface ResolvedProbeInstallPaths {
     readonly workdirPath: string;
     readonly manifestPath: string;
     readonly runtimePath: string;
+    readonly imageInjectorPath: string;
     readonly backupPath: string;
     readonly loaderOutputPath: string;
     readonly probeOutputPath: string;
@@ -106,6 +108,7 @@ export class Cocos2dJsProbeInstaller {
         await this.ensureWorkdir(resolvedPaths);
         await this.cleanupGeneratedOutputFiles(resolvedPaths);
         await copyFile(path.join(PROJECT_ROOT_PATH, RUNTIME_SOURCE_RELATIVE_PATH), resolvedPaths.runtimePath);
+        await copyFile(path.join(PROJECT_ROOT_PATH, IMAGE_INJECTOR_SOURCE_RELATIVE_PATH), resolvedPaths.imageInjectorPath);
 
         const patchResult: Result<ProbePatchedFile> = await this.patchJsbBoot(resolvedPaths);
 
@@ -222,6 +225,7 @@ export class Cocos2dJsProbeInstaller {
             workdirPath: workdirPath,
             manifestPath: path.join(workdirPath, MANIFEST_FILE_NAME),
             runtimePath: path.join(workdirPath, "runtime", "cocos2d-js", "opengametranslator-probe.js"),
+            imageInjectorPath: path.join(workdirPath, "runtime", "cocos2d-js", "opengametranslator-image-injector.js"),
             backupPath: path.join(workdirPath, "backups", "Resources__script__jsb_boot.js.bak"),
             loaderOutputPath: path.join(workdirPath, "output", "opengametranslator-loader.json"),
             probeOutputPath: path.join(workdirPath, "output", "opengametranslator-extracted-texts.json"),
@@ -294,7 +298,10 @@ export class Cocos2dJsProbeInstaller {
             path.join(resolvedPaths.workdirPath, "probe-output", "opengametranslator-extracted-texts.json"),
             path.join(resolvedPaths.workdirPath, "output", "opengametranslator-runtime-status.json"),
             path.join(resolvedPaths.workdirPath, "opengametranslator.package.json"),
-            path.join(resolvedPaths.workdirPath, "runtime", "cocos2d-js", "opengametranslator-runtime.js")
+            path.join(resolvedPaths.workdirPath, "runtime", "cocos2d-js", "opengametranslator-runtime.js"),
+            path.join(resolvedPaths.workdirPath, "runtime", "cocos2d-js", "opengametranslator-image-injector.js"),
+            path.join(resolvedPaths.workdirPath, "output", "image-requests.jsonl"),
+            path.join(resolvedPaths.workdirPath, "output", "image-injector-status.json")
         ];
 
         for (const outputFilePath of outputFilePaths) {
@@ -439,6 +446,7 @@ export class Cocos2dJsProbeInstaller {
         try {
             if (loadByEval(probePaths[i])) {
                 writeLoaderStatus('loaded-by-eval', probePaths[i]);
+                loadImageInjector();
                 return;
             }
         } catch (evalError) {
@@ -448,6 +456,7 @@ export class Cocos2dJsProbeInstaller {
         try {
             require(probePaths[i]);
             writeLoaderStatus('loaded-by-require', probePaths[i]);
+            loadImageInjector();
             return;
         } catch (requireError) {
             writeLoaderStatus('require-failed', probePaths[i] + ': ' + requireError);
@@ -455,6 +464,33 @@ export class Cocos2dJsProbeInstaller {
     }
 
     writeLoaderStatus('failed', 'all load attempts failed');
+
+    function loadImageInjector() {
+        var injectorPaths = [
+            'OpenGameTranslator/runtime/cocos2d-js/opengametranslator-image-injector.js',
+            'Resources/OpenGameTranslator/runtime/cocos2d-js/opengametranslator-image-injector.js',
+            './OpenGameTranslator/runtime/cocos2d-js/opengametranslator-image-injector.js'
+        ];
+
+        for (var j = 0; j < injectorPaths.length; j += 1) {
+            try {
+                if (loadByEval(injectorPaths[j])) {
+                    writeLoaderStatus('injector-loaded', injectorPaths[j]);
+                    return;
+                }
+            } catch (e) {
+                // Image injector is optional — don't fail the loader.
+            }
+
+            try {
+                require(injectorPaths[j]);
+                writeLoaderStatus('injector-loaded-by-require', injectorPaths[j]);
+                return;
+            } catch (e2) {
+                // Optional.
+            }
+        }
+    }
 }());
 ${MARKER_END}
 `;

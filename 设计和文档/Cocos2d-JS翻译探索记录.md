@@ -91,21 +91,63 @@ Neruko 汉化版分析：`libcocos2d.dll` 被修改，翻译在 C++ 运行时层
 - 无 PNG 文本元数据块（`formatHint: "PNG"`）
 - 肉眼确认：部分帧含白色日文对话文字
 
-## 8. 当前结论
+## 8. 注入路径验证（2026-05-20 突破）
 
-- **提取路径已打通**：运行时解密 → 导出 PNG → OCR 提取原文
-- **注入路径待验证**：Hook `getDataFromFile()` 返回预生成明文译文 PNG。引擎对非 `enc` 头文件直接放行，译文图片无需加密
+### 8.1 JS 层 Hook 失败
+
+| Hook 点 | 结果 |
+|---------|------|
+| `jsb.fileUtils.getDataFromFile` | 仅拦截 JS 调用，引擎纹理加载不走 JS |
+| `cc.loader.loadImg` | 0 次调用 |
+| `cc.TextureCache._addImage` (C++ binding) | 0 次调用 |
+| `cc.TextureCache._addImageAsync` (C++ binding) | 0 次调用 |
+
+**结论**：AGTK 引擎在 C++ 侧直接调用 `TextureCache::addImage`，完全绕过所有 JS 层入口。
+
+### 8.2 CRT `fopen` Hook 失败
+
+IAT hook 拦截了 168 次 `fopen` 调用，其中 **0 次是游戏读取 PNG**。全部是探针的写入操作（`mode=wb`）。
+
+**结论**：Cocos2d-x Windows 版不使用 CRT `fopen` 读文件，使用 Win32 `CreateFileW` API。
+
+### 8.3 `CreateFileW` Hook 成功
+
+在 `kernel32.dll` 的 `CreateFileW` 上安装 inline hook，添加重定向逻辑：
+- 检测到 `.png` 文件路径 → 查找 `translated-img/<basename>` 替换文件
+- 若替换文件存在 → 返回替换文件的 `HANDLE`
+- 用重入守卫（`g_inFileHook`）避免 `FlushLog` 递归
+
+**验证结果**：游戏对话中出现红色标记边框（标记在 1389-1395.png 上的测试注入），证明注入流水线完整可行。
+
+### 8.4 注入架构
+
+```
+游戏请求 img/1389.png
+  → CreateFileW("C:\...\Resources\img\1389.png")
+    → DetourCreateFileW hook 拦截
+      → 检测 translated-img/1389.png 存在
+        → CreateFileW(替换路径) → 返回替换 HANDLE
+          → 游戏读取明文 PNG 数据 → 正常渲染
+```
+
+## 9. 当前结论
+
+- **提取路径已打通**：运行时解密 → 导出 PNG（122 张）→ 逐帧 OCR 提取原文
+- **注入路径已验证**：`CreateFileW` inline hook + `translated-img/` 替换图片，红色标记测试通过
+- **译文图片无需加密**：引擎对非 `enc` 头文件直接放行
 - **project.json 中无对话文本**——开发者在构建时将文字烘焙到图片，原始文本不在运行时产物中
+- **JS 层 hooks 对本游戏无效**——图像加载全程在 C++/Win32 层完成
 
-## 9. 工具清单
+## 10. 工具清单
 
 | 工具 | 用途 |
 |------|------|
-| `tools/hook_dll/` | C++ inline hook DLL、注入器、启动器 |
+| `tools/hook_dll/` | C++ inline hook DLL（AGTK 文本诊断 + CreateFileW 图片注入）、注入器、启动器 |
 | `tools/scan_dialogue.py` / `quick_scan.py` | 内存日文字符串扫描 |
 | `tools/analyze_project_json.py` | project.json 静态结构分析 |
 | `tools/analyze_agtk_focused_text_system.mjs` | AGTK 焦点文本系统分析 |
 | `tools/compare_agtk_action_groups.mjs` | Neruko/Maya actionGroup 结构对比 |
 | `tools/audit_cocos_static_text.mjs` | Cocos 游戏静态文本审计 |
 | `runtime/cocos2d-js/opengametranslator-probe.js` | JS 探针（文本提取+结构分析+图片导出） |
+| `runtime/cocos2d-js/opengametranslator-image-injector.js` | JS 层图片注入（**对本游戏无效**，AGTK 不走 JS 纹理路径） |
 | `runtime/cocos2d-js/opengametranslator-runtime.js` | JS 翻译运行时 |

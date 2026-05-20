@@ -37,3 +37,7 @@ samples/
 tools/hook_dll/*.exe
 tools/hook_dll/*.dll
 tools/hook_dll/*.obj
+
+# Python virtual environment
+.venv/
+uv.lock
