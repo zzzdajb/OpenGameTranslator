@@ -1,22 +1,19 @@
 # OpenGameTranslator
 
-OpenGameTranslator 是一个开源游戏翻译辅助工具。它从本地游戏中提取文本，生成适合外部翻译工具或 LLM 使用的 CSV，再把译文打包成游戏运行时可读取的本地翻译包。
-
-当前 MVP 优先验证 TyranoScript；《背信少女》只是当前代表验证游戏，不是项目的专用目标。
+OpenGameTranslator 是一个开源游戏翻译辅助工具。它从本地游戏中提取文本，生成适合翻译的 CSV，再把译文打包成游戏运行时可读取的本地翻译包。
 
 ## 设计原则
 
-- 不内置翻译 API，不自动调用在线翻译服务。
-- 不提交、不分发商业游戏资源。
-- 普通用户不手动编辑游戏文件。
-- 首选非侵入式运行；如果实现成本明显更高，允许工具自动做可溯源、可恢复的托管修改。
+- 保持克制，不提供、不内置翻译服务。
+- 无需手动编辑游戏文件。
+- 首选非侵入式运行；允许可溯源、可恢复的托管修改。
 - 托管修改必须有备份、manifest 和还原入口。
 
 ## 引擎支持
 
 | 引擎 | 当前状态 | 代表验证游戏 | 已有能力 | 备注 |
 | --- | --- | --- | --- | --- |
-| TyranoScript | MVP 已支持 | 《背信少女》 | 检测、文本提取、CSV 修复、翻译包构建、runtime hook、托管安装/还原 | 当前主线 |
+| TyranoScript | MVP 已支持 | 《背信少女リリィハント》 | 检测、文本提取、CSV 修复、翻译包构建、runtime hook、托管安装/还原 | 当前主线 |
 | RPG Maker MV | 计划支持 | 待定 | 尚未实现 | 优先复用 CSV、打包和托管安装框架 |
 | RPG Maker MZ | 计划支持 | 待定 | 尚未实现 | 与 MV 类似，但需要单独验证数据结构和 runtime |
 | Cocos2d-JS v3.15 JSB 原生版 | 工程文本可提取，AGTK 对话未完成 | `games/maya` 本地样本 | 检测、运行时导出、导出 JSON 转 CSV、工程文本托管安装/还原、native 诊断工具 | `games/maya` 剧情对话不在 `project.json`，需要继续验证 AGTK native hook |
@@ -187,12 +184,3 @@ output/         本地提取和构建输出，已忽略
 - [Windows 托管安装说明](./设计和文档/Windows托管安装说明.md)
 - [TyranoScript Runtime 说明](./runtime/tyrano/README.md)
 - [Cocos2d-JS Runtime 说明](./runtime/cocos2d-js/README.md)
-
-## 后续计划
-
-- 扩大 TyranoScript 实机测试范围：菜单、存读档、回想、后期路线等。
-- 补充更严格的控制码和占位符校验。
-- 根据漏翻样本继续补 TyranoScript 提取和 runtime hook 规则。
-- 完成 AGTK native 诊断，确认能否 hook `agtk::TextGui::updateText` 这类对话显示函数。
-- 为 RPG Maker MV/MZ 复用托管安装框架。
-- 后续再评估非侵入式 launcher。
